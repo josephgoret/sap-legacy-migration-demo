@@ -70,10 +70,10 @@ class OrderHeader(BaseModel):
     document_type: str = Field(
         default="ZOR", description="Sales document type (BSART/AUART)"
     )
-    sales_org: str = Field(description="Sales organization")
-    distribution_channel: str = Field(description="Distribution channel")
-    division: str = Field(description="Division")
-    sold_to_party: str = Field(description="Sold-to customer number")
+    sales_org: str = Field(max_length=4, description="Sales organization")
+    distribution_channel: str = Field(max_length=2, description="Distribution channel")
+    division: str = Field(max_length=2, description="Division")
+    sold_to_party: str = Field(max_length=10, description="Sold-to customer number")
     ship_to_party: Optional[str] = Field(
         default=None, description="Ship-to customer number"
     )
@@ -105,7 +105,9 @@ class InboundOrderMessage(BaseModel):
     In the migrated system, this is a JSON message received from a message queue.
     """
 
-    message_id: str = Field(description="Unique message ID (replaces IDoc DOCNUM)")
+    message_id: str = Field(
+        min_length=1, max_length=70, description="Unique message ID (replaces IDoc DOCNUM)"
+    )
     message_type: str = Field(
         default="ORDERS", description="Message type (replaces MESTYP)"
     )
