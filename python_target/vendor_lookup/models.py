@@ -18,8 +18,10 @@ class VendorDetail(BaseModel):
     Combines data from LFA1 (general), LFB1 (company code), ADR6 (email).
     """
 
-    vendor_number: str = Field(description="Vendor account number (LIFNR)")
-    name1: str = Field(description="Name line 1 (NAME1)")
+    vendor_number: str = Field(
+        min_length=1, max_length=10, description="Vendor account number (LIFNR)"
+    )
+    name1: str = Field(max_length=35, description="Name line 1 (NAME1)")
     name2: Optional[str] = Field(default=None, description="Name line 2 (NAME2)")
     street: Optional[str] = Field(default=None, description="Street address (STRAS)")
     city: Optional[str] = Field(default=None, description="City (ORT01)")
@@ -80,9 +82,12 @@ class PurchaseOrderItem(BaseModel):
 class VendorLookupRequest(BaseModel):
     """Input parameters — maps to ABAP function module IMPORTING parameters."""
 
-    vendor_number: str = Field(description="Vendor number (IV_LIFNR)")
+    vendor_number: str = Field(
+        min_length=1, max_length=10, description="Vendor number (IV_LIFNR)"
+    )
     company_code: str = Field(
-        default="1000", description="Company code (IV_BUKRS)"
+        default="1000", min_length=1, max_length=4,
+        description="Company code (IV_BUKRS)",
     )
     max_po_items: int = Field(
         default=50, ge=1, le=500, description="Max PO items to return (IV_MAX_POS)"
