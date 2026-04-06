@@ -109,6 +109,9 @@ def build_summary(items: list[InventoryItem]) -> InventoryReportSummary:
     return summary
 
 
+MAX_RAW_DATA_SIZE = 10_000
+
+
 def generate_inventory_report(
     raw_data: list[dict],
     filters: InventoryFilters,
@@ -122,7 +125,15 @@ def generate_inventory_report(
 
     Returns:
         Complete report response with items, summary, and metadata.
+
+    Raises:
+        ValueError: If ``raw_data`` exceeds ``MAX_RAW_DATA_SIZE`` rows.
     """
+    if len(raw_data) > MAX_RAW_DATA_SIZE:
+        raise ValueError(
+            f"Input size {len(raw_data)} exceeds maximum of {MAX_RAW_DATA_SIZE} rows"
+        )
+
     today = date.today()
     items: list[InventoryItem] = []
 
