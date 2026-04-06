@@ -292,3 +292,66 @@ class TestProcessOrderBatch:
         assert batch_result.total_processed == 0
         assert batch_result.successful == 0
         assert batch_result.failed == 0
+
+
+# ---------------------------------------------------------------------------
+# Edge-case: E1EDP19 segment before any E1EDP01 item segment
+# ---------------------------------------------------------------------------
+
+class TestParseIdocOrphanedMaterialSegment:
+    """ABAP: IF lt_items IS NOT INITIAL before processing E1EDP19.
+
+    In the original ABAP (lines 132-138), an E1EDP19 segment is only
+    processed when lt_items already contains at least one item.  The
+    Python equivalent guards this with `if current_item is not None`.
+
+    This test verifies that a malformed IDoc whose E1EDP19 segment
+    arrives *before* any E1EDP01 is silently ignored — matching the
+    ABAP behaviour — and that a subsequent valid item is unaffected.
+    """
+
+    def test_orphaned_e1edp19_before_any_item_is_ignored(self):
+        segments = [
+            {
+                "segment_type": "E1EDK01",
+                "BSART": "ZOR",
+                "CURCY": "EUR",
+                "SALES_ORG": "2000",
+                "DISTR_CHAN": "20",
+                "DIVISION": "01",
+            },
+            {
+                "segment_type": "E1EDKA1",
+                "PARVW": "AG",
+                "PARTN": "CUST-999",
+            },
+            # E1EDP19 arrives before any E1EDP01 — should be silently skipped
+            {
+                "segment_type": "E1EDP19",
+                "QUALF": "002",
+                "IDTNR": "ORPHAN-MAT",
+            },
+            # Now a valid item followed by its own material segment
+            {
+                "segment_type": "E1EDP01",
+                "POSEX": "000010",
+                "MENGE": 5,
+                "MENEE": "EA",
+                "VPREI": 10.00,
+            },
+            {
+                "segment_type": "E1EDP19",
+                "QUALF": "002",
+                "IDTNR": "REAL-MAT-001",
+            },
+        ]
+
+        order = parse_idoc_to_order(segments)
+
+        # Only one item should exist (the orphaned E1EDP19 must not create one)
+        assert len(order.items) == 1
+        assert order.items[0].item_number == "000010"
+        # The valid E1EDP19 after the item should have been applied correctly
+        assert order.items[0].material_number == "REAL-MAT-001"
+        # The orphaned material must not leak into the valid item
+        assert order.items[0].customer_material is None
