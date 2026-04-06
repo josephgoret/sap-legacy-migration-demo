@@ -57,12 +57,12 @@ class InventoryFilters(BaseModel):
 class InventoryItem(BaseModel):
     """Single inventory line item — maps to ABAP ty_inventory structure."""
 
-    material_number: str = Field(description="Material number (MATNR)")
-    description: str = Field(description="Material description (MAKTX)")
-    material_type: str = Field(description="Material type (MTART)")
-    material_group: str = Field(description="Material group (MATKL)")
-    plant: str = Field(description="Plant code (WERKS)")
-    storage_location: str = Field(description="Storage location (LGORT)")
+    material_number: str = Field(max_length=40, description="Material number (MATNR)")
+    description: str = Field(max_length=40, description="Material description (MAKTX)")
+    material_type: str = Field(max_length=4, description="Material type (MTART)")
+    material_group: str = Field(max_length=9, description="Material group (MATKL)")
+    plant: str = Field(max_length=4, description="Plant code (WERKS)")
+    storage_location: str = Field(max_length=4, description="Storage location (LGORT)")
     available_stock: Decimal = Field(description="Unrestricted stock (LABST)")
     inspection_stock: Decimal = Field(
         default=Decimal("0"), description="Quality inspection stock (INSME)"
@@ -82,7 +82,7 @@ class InventoryItem(BaseModel):
     last_receipt_date: Optional[date] = Field(
         default=None, description="Last goods receipt date"
     )
-    currency: str = Field(default="USD", description="Currency code")
+    currency: str = Field(default="USD", max_length=5, description="Currency code")
     stock_value: Decimal = Field(description="Estimated stock value")
 
 

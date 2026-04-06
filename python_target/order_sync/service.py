@@ -225,17 +225,16 @@ def process_single_order(
             order_number=order_number,
         )
 
-    except Exception as exc:
+    except Exception:
         # Replaces: CALL FUNCTION 'BAPI_TRANSACTION_ROLLBACK'
-        logger.error(
-            "Order creation failed for message %s: %s",
+        logger.exception(
+            "Order creation failed for message %s",
             message.message_id,
-            exc,
         )
         return OrderSyncResult(
             message_id=message.message_id,
             status=OrderStatus.FAILED,
-            error_messages=[str(exc)],
+            error_messages=["Internal error during order creation"],
         )
 
 
