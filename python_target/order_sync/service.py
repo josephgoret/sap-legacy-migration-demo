@@ -48,6 +48,15 @@ class OrderValidationError(Exception):
         super().__init__(f"Validation failed for {message_id}: {'; '.join(errors)}")
 
 
+class OrderCreationError(Exception):
+    """Raised when the target system rejects order creation.
+
+    Replaces ABAP: BAPI return with type 'E' or 'A'.
+    Use this for *expected* failures from the target system so they can be
+    distinguished from unexpected internal errors.
+    """
+
+
 def validate_order(order: OrderHeader) -> list[str]:
     """Validate parsed order data before processing.
 
@@ -225,10 +234,11 @@ def process_single_order(
             order_number=order_number,
         )
 
-    except Exception as exc:
-        # Replaces: CALL FUNCTION 'BAPI_TRANSACTION_ROLLBACK'
-        logger.error(
-            "Order creation failed for message %s: %s",
+    except OrderCreationError as exc:
+        # Expected target-system rejection — safe to surface the message.
+        # Replaces: BAPI return type 'E'/'A' → BAPI_TRANSACTION_ROLLBACK
+        logger.warning(
+            "Order creation rejected for message %s: %s",
             message.message_id,
             exc,
         )
@@ -238,6 +248,23 @@ def process_single_order(
             error_messages=[str(exc)],
         )
 
+    except Exception:
+        # Unexpected internal error — log full detail but return only a
+        # generic message to avoid leaking internals (DB strings, paths, etc.).
+        # Replaces: CALL FUNCTION 'BAPI_TRANSACTION_ROLLBACK'
+        logger.exception(
+            "Unexpected error during order creation for message %s",
+            message.message_id,
+        )
+        return OrderSyncResult(
+            message_id=message.message_id,
+            status=OrderStatus.FAILED,
+            error_messages=["Internal error during order creation"],
+        )
+
+
+MAX_BATCH_SIZE = 1000
+
 
 def process_order_batch(
     messages: list[InboundOrderMessage],
@@ -246,7 +273,15 @@ def process_order_batch(
 
     Replaces the outer LOOP AT idoc_contrl in the ABAP function module.
     Each message is processed independently (matches IDoc-by-IDoc processing).
+
+    Raises:
+        ValueError: If the batch exceeds ``MAX_BATCH_SIZE`` messages.
     """
+    if len(messages) > MAX_BATCH_SIZE:
+        raise ValueError(
+            f"Batch size {len(messages)} exceeds maximum of {MAX_BATCH_SIZE}"
+        )
+
     results: list[OrderSyncResult] = []
 
     for message in messages:
