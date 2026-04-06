@@ -12,7 +12,9 @@ import pytest
 
 from python_target.vendor_lookup.models import (
     PurchaseOrderItem,
+    VendorDetail,
     VendorLookupRequest,
+    VendorLookupResponse,
 )
 from python_target.vendor_lookup.service import (
     AuthorizationError,
@@ -161,6 +163,78 @@ class TestCalculatePOAggregates:
         assert total_value == Decimal("0")
         assert open_count == 0
 
+    def test_all_items_open(self):
+        """ABAP: every item has elikz = ' ' (delivery not completed)."""
+        items = [
+            PurchaseOrderItem(
+                po_number="PO1", po_item="10", po_date=date.today(),
+                quantity=Decimal("10"), unit_of_measure="EA",
+                net_price=Decimal("5"), delivery_completed=False,
+            ),
+            PurchaseOrderItem(
+                po_number="PO2", po_item="10", po_date=date.today(),
+                quantity=Decimal("20"), unit_of_measure="EA",
+                net_price=Decimal("10"), delivery_completed=False,
+            ),
+        ]
+        total_value, open_count = calculate_po_aggregates(items)
+        assert open_count == 2
+        assert total_value == Decimal("250")  # 10*5 + 20*10
+
+    def test_all_items_completed(self):
+        """ABAP: every item has elikz = 'X' — open count should be 0."""
+        items = [
+            PurchaseOrderItem(
+                po_number="PO1", po_item="10", po_date=date.today(),
+                quantity=Decimal("10"), unit_of_measure="EA",
+                net_price=Decimal("5"), delivery_completed=True,
+            ),
+            PurchaseOrderItem(
+                po_number="PO2", po_item="10", po_date=date.today(),
+                quantity=Decimal("20"), unit_of_measure="EA",
+                net_price=Decimal("10"), delivery_completed=True,
+            ),
+        ]
+        _, open_count = calculate_po_aggregates(items)
+        assert open_count == 0
+
+    def test_single_item(self):
+        """Boundary: single PO item aggregation."""
+        items = [
+            PurchaseOrderItem(
+                po_number="PO1", po_item="10", po_date=date.today(),
+                quantity=Decimal("7"), unit_of_measure="EA",
+                net_price=Decimal("3.50"), delivery_completed=False,
+            ),
+        ]
+        total_value, open_count = calculate_po_aggregates(items)
+        assert total_value == Decimal("24.50")
+        assert open_count == 1
+
+    def test_zero_price_item_contributes_nothing(self):
+        """ABAP: netpr * menge — zero price means zero contribution."""
+        items = [
+            PurchaseOrderItem(
+                po_number="PO1", po_item="10", po_date=date.today(),
+                quantity=Decimal("100"), unit_of_measure="EA",
+                net_price=Decimal("0"), delivery_completed=False,
+            ),
+        ]
+        total_value, _ = calculate_po_aggregates(items)
+        assert total_value == Decimal("0")
+
+    def test_zero_quantity_item_contributes_nothing(self):
+        """ABAP: netpr * menge — zero quantity means zero contribution."""
+        items = [
+            PurchaseOrderItem(
+                po_number="PO1", po_item="10", po_date=date.today(),
+                quantity=Decimal("0"), unit_of_measure="EA",
+                net_price=Decimal("99.99"), delivery_completed=False,
+            ),
+        ]
+        total_value, _ = calculate_po_aggregates(items)
+        assert total_value == Decimal("0")
+
 
 # ---------------------------------------------------------------------------
 # lookup_vendor — end-to-end function module logic
@@ -227,3 +301,181 @@ class TestLookupVendor:
 
         assert response.vendor.is_blocked is True
         assert response.return_code == 0
+
+    def test_deleted_vendor_still_returned(self, sample_vendor_data):
+        """ABAP: loevm (deletion flag) is informational — vendor is still returned."""
+        sample_vendor_data["is_deleted"] = True
+        request = VendorLookupRequest(vendor_number="0000001000")
+        response = lookup_vendor(request, sample_vendor_data, [])
+
+        assert response.vendor.is_deleted is True
+        assert response.return_code == 0
+
+    def test_vendor_with_no_po_history(self, sample_vendor_data):
+        """Vendor exists but has no purchase orders — aggregates should be zero."""
+        request = VendorLookupRequest(vendor_number="0000001000")
+        response = lookup_vendor(request, sample_vendor_data, [])
+
+        assert response.return_code == 0
+        assert response.po_history == []
+        assert response.vendor.total_po_value == Decimal("0")
+        assert response.vendor.open_po_count == 0
+        assert "0 PO items" in response.return_message
+
+    def test_default_date_from_is_365_days(self, sample_vendor_data):
+        """ABAP: IF iv_date_from IS INITIAL. lv_date_from = sy-datum - 365."""
+        today = date.today()
+        old_po = {
+            "po_number": "4500000001",
+            "po_item": "00010",
+            "po_date": (today - timedelta(days=400)).isoformat(),
+            "quantity": 10,
+            "unit_of_measure": "EA",
+            "net_price": 5.0,
+            "delivery_completed": False,
+        }
+        recent_po = {
+            "po_number": "4500000002",
+            "po_item": "00010",
+            "po_date": (today - timedelta(days=100)).isoformat(),
+            "quantity": 10,
+            "unit_of_measure": "EA",
+            "net_price": 5.0,
+            "delivery_completed": False,
+        }
+        request = VendorLookupRequest(vendor_number="0000001000")
+        response = lookup_vendor(request, sample_vendor_data, [old_po, recent_po])
+
+        assert len(response.po_history) == 1
+        assert response.po_history[0].po_number == "4500000002"
+
+    def test_default_company_code(self):
+        """ABAP: IV_BUKRS DEFAULT '1000'."""
+        request = VendorLookupRequest(vendor_number="0000001000")
+        assert request.company_code == "1000"
+
+    def test_default_max_po_items(self):
+        """ABAP: IV_MAX_POS DEFAULT 50."""
+        request = VendorLookupRequest(vendor_number="0000001000")
+        assert request.max_po_items == 50
+
+    def test_max_po_items_boundary_of_one(self, sample_vendor_data, sample_po_data):
+        """ABAP: UP TO 1 ROWS — only most recent PO returned."""
+        request = VendorLookupRequest(
+            vendor_number="0000001000",
+            max_po_items=1,
+        )
+        response = lookup_vendor(request, sample_vendor_data, sample_po_data)
+        assert len(response.po_history) == 1
+
+    def test_vendor_data_with_minimal_fields(self):
+        """Vendor record with only required fields — optional fields default."""
+        minimal_data = {
+            "vendor_number": "0000009999",
+            "name1": "Minimal Vendor",
+        }
+        request = VendorLookupRequest(vendor_number="0000009999")
+        response = lookup_vendor(request, minimal_data, [])
+
+        assert response.vendor.vendor_number == "0000009999"
+        assert response.vendor.name2 is None
+        assert response.vendor.street is None
+        assert response.vendor.email is None
+        assert response.vendor.currency == "USD"
+        assert response.vendor.is_blocked is False
+        assert response.vendor.is_deleted is False
+
+    def test_po_data_with_minimal_fields(self, sample_vendor_data):
+        """PO rows with only required fields — optional fields default."""
+        today = date.today()
+        minimal_po = {
+            "po_number": "4500009999",
+            "po_item": "00010",
+            "po_date": (today - timedelta(days=10)).isoformat(),
+            "quantity": 5,
+            "unit_of_measure": "EA",
+            "net_price": 10.0,
+        }
+        request = VendorLookupRequest(vendor_number="0000001000")
+        response = lookup_vendor(request, sample_vendor_data, [minimal_po])
+
+        assert len(response.po_history) == 1
+        item = response.po_history[0]
+        assert item.material_number is None
+        assert item.short_text is None
+        assert item.purchase_requisition is None
+        assert item.delivery_completed is False
+        assert item.currency == "USD"
+
+    def test_po_date_exactly_at_boundary(self, sample_vendor_data):
+        """ABAP: WHERE h~bedat >= lv_date_from — boundary date is inclusive."""
+        boundary_date = date.today() - timedelta(days=30)
+        po_at_boundary = {
+            "po_number": "4500000001",
+            "po_item": "00010",
+            "po_date": boundary_date.isoformat(),
+            "quantity": 1,
+            "unit_of_measure": "EA",
+            "net_price": 1.0,
+        }
+        request = VendorLookupRequest(
+            vendor_number="0000001000",
+            date_from=boundary_date,
+        )
+        response = lookup_vendor(request, sample_vendor_data, [po_at_boundary])
+        assert len(response.po_history) == 1
+
+    def test_aggregates_computed_after_filtering(self, sample_vendor_data):
+        """Aggregates reflect only the POs that pass the date/limit filters."""
+        today = date.today()
+        po_data = [
+            {
+                "po_number": "OLD", "po_item": "10",
+                "po_date": (today - timedelta(days=400)).isoformat(),
+                "quantity": 1000, "unit_of_measure": "EA",
+                "net_price": 100.0, "delivery_completed": False,
+            },
+            {
+                "po_number": "NEW", "po_item": "10",
+                "po_date": (today - timedelta(days=10)).isoformat(),
+                "quantity": 2, "unit_of_measure": "EA",
+                "net_price": 5.0, "delivery_completed": False,
+            },
+        ]
+        request = VendorLookupRequest(vendor_number="0000001000")
+        response = lookup_vendor(request, sample_vendor_data, po_data)
+
+        assert len(response.po_history) == 1
+        assert response.vendor.total_po_value == Decimal("10.00")
+        assert response.vendor.open_po_count == 1
+
+    def test_return_message_contains_po_count(self, sample_vendor_data, sample_po_data):
+        """ABAP: ev_return_msg includes the number of PO items returned."""
+        request = VendorLookupRequest(vendor_number="0000001000")
+        response = lookup_vendor(request, sample_vendor_data, sample_po_data)
+        assert "3 PO items" in response.return_message
+
+    def test_return_message_contains_vendor_number(self, sample_vendor_data):
+        """ABAP: ev_return_msg = |Vendor { iv_lifnr } retrieved successfully|."""
+        request = VendorLookupRequest(vendor_number="0000001000")
+        response = lookup_vendor(request, sample_vendor_data, [])
+        assert "0000001000" in response.return_message
+
+
+# ---------------------------------------------------------------------------
+# Exception classes — mirrors ABAP RAISE exceptions
+# ---------------------------------------------------------------------------
+
+class TestExceptions:
+
+    def test_vendor_not_found_error_carries_vendor_number(self):
+        """ABAP: RAISE vendor_not_found — exception carries the LIFNR."""
+        err = VendorNotFoundError("0000005555")
+        assert err.vendor_number == "0000005555"
+        assert "0000005555" in str(err)
+
+    def test_authorization_error_carries_company_code(self):
+        """ABAP: RAISE authorization_failed — exception carries BUKRS."""
+        err = AuthorizationError("2000")
+        assert err.company_code == "2000"
+        assert "2000" in str(err)
