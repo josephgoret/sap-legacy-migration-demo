@@ -22,6 +22,15 @@ from datetime import date
 from decimal import Decimal
 from typing import Optional
 
+
+class TargetSystemError(Exception):
+    """Raised when the target system rejects or fails to create an order.
+
+    Wraps errors from the downstream order-creation API so that
+    process_single_order can distinguish expected business failures
+    from unexpected programming errors.
+    """
+
 from .models import (
     InboundOrderMessage,
     OrderHeader,
@@ -225,8 +234,11 @@ def process_single_order(
             order_number=order_number,
         )
 
-    except Exception as exc:
+    except (TargetSystemError, ValueError, ConnectionError) as exc:
         # Replaces: CALL FUNCTION 'BAPI_TRANSACTION_ROLLBACK'
+        # Only catch expected failure modes from the target system.
+        # Unexpected errors (TypeError, AttributeError, etc.) are allowed
+        # to propagate so they surface as bugs rather than silent failures.
         logger.error(
             "Order creation failed for message %s: %s",
             message.message_id,
@@ -269,6 +281,12 @@ def _create_order_in_target_system(order: OrderHeader) -> str:
 
     In production, this would call the target ERP/OMS API.
     For the demo, generates a synthetic order number.
+
+    WARNING: This is a demo stub. The UUID-based number generation is NOT
+    suitable for production use — it lacks uniqueness guarantees after
+    truncation and provides no sequence coordination. Production
+    implementations should use a database sequence or the target system's
+    native document numbering.
 
     Replaces: CALL FUNCTION 'BAPI_SALESORDER_CREATEFROMDAT2' ... IMPORTING salesdocument = lv_vbeln
     """
