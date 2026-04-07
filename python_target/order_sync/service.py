@@ -225,7 +225,7 @@ def process_single_order(
             order_number=order_number,
         )
 
-    except Exception as exc:
+    except (ValueError, RuntimeError, ConnectionError, TimeoutError) as exc:
         # Replaces: CALL FUNCTION 'BAPI_TRANSACTION_ROLLBACK'
         logger.error(
             "Order creation failed for message %s: %s",
@@ -235,7 +235,7 @@ def process_single_order(
         return OrderSyncResult(
             message_id=message.message_id,
             status=OrderStatus.FAILED,
-            error_messages=[str(exc)],
+            error_messages=["Order creation failed in target system"],
         )
 
 

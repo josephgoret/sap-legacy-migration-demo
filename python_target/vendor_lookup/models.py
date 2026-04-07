@@ -80,7 +80,10 @@ class PurchaseOrderItem(BaseModel):
 class VendorLookupRequest(BaseModel):
     """Input parameters — maps to ABAP function module IMPORTING parameters."""
 
-    vendor_number: str = Field(description="Vendor number (IV_LIFNR)")
+    vendor_number: str = Field(
+        min_length=1, max_length=10, pattern=r"^[A-Za-z0-9]+$",
+        description="Vendor number (IV_LIFNR)",
+    )
     company_code: str = Field(
         default="1000", description="Company code (IV_BUKRS)"
     )
