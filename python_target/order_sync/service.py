@@ -225,8 +225,10 @@ def process_single_order(
             order_number=order_number,
         )
 
-    except Exception as exc:
+    except (ValueError, RuntimeError, KeyError) as exc:
         # Replaces: CALL FUNCTION 'BAPI_TRANSACTION_ROLLBACK'
+        # Only catch expected order-creation errors; let system-level
+        # exceptions (MemoryError, SystemExit, etc.) propagate.
         logger.error(
             "Order creation failed for message %s: %s",
             message.message_id,
