@@ -46,7 +46,7 @@ class VendorDetail(BaseModel):
         default=False, description="Deletion flag (LOEVM)"
     )
     total_po_value: Decimal = Field(
-        default=Decimal("0"), description="Sum of PO line values"
+        default=Decimal("0"), ge=0, description="Sum of PO line values"
     )
     open_po_count: int = Field(
         default=0, description="Count of open (not delivered) PO items"
@@ -65,9 +65,9 @@ class PurchaseOrderItem(BaseModel):
     short_text: Optional[str] = Field(
         default=None, description="Item short text (TXZ01)"
     )
-    quantity: Decimal = Field(description="Order quantity (MENGE)")
+    quantity: Decimal = Field(ge=0, description="Order quantity (MENGE)")
     unit_of_measure: str = Field(description="Unit of measure (MEINS)")
-    net_price: Decimal = Field(description="Net price per unit (NETPR)")
+    net_price: Decimal = Field(ge=0, description="Net price per unit (NETPR)")
     currency: str = Field(default="USD", description="PO currency (WAERS)")
     delivery_completed: bool = Field(
         default=False, description="Delivery completed flag (ELIKZ)"

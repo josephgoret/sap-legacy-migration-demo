@@ -63,17 +63,17 @@ class InventoryItem(BaseModel):
     material_group: str = Field(description="Material group (MATKL)")
     plant: str = Field(description="Plant code (WERKS)")
     storage_location: str = Field(description="Storage location (LGORT)")
-    available_stock: Decimal = Field(description="Unrestricted stock (LABST)")
+    available_stock: Decimal = Field(ge=0, description="Unrestricted stock (LABST)")
     inspection_stock: Decimal = Field(
-        default=Decimal("0"), description="Quality inspection stock (INSME)"
+        default=Decimal("0"), ge=0, description="Quality inspection stock (INSME)"
     )
     blocked_stock: Decimal = Field(
-        default=Decimal("0"), description="Blocked stock (SPEME)"
+        default=Decimal("0"), ge=0, description="Blocked stock (SPEME)"
     )
-    total_stock: Decimal = Field(description="Sum of all stock categories")
-    reorder_point: Decimal = Field(description="Reorder point (MINBE)")
+    total_stock: Decimal = Field(ge=0, description="Sum of all stock categories")
+    reorder_point: Decimal = Field(ge=0, description="Reorder point (MINBE)")
     max_stock_level: Decimal = Field(
-        default=Decimal("0"), description="Maximum stock level (MABST)"
+        default=Decimal("0"), ge=0, description="Maximum stock level (MABST)"
     )
     stock_status: StockStatus = Field(description="Traffic-light indicator")
     stock_percentage: Decimal = Field(
@@ -83,7 +83,7 @@ class InventoryItem(BaseModel):
         default=None, description="Last goods receipt date"
     )
     currency: str = Field(default="USD", description="Currency code")
-    stock_value: Decimal = Field(description="Estimated stock value")
+    stock_value: Decimal = Field(ge=0, description="Estimated stock value")
 
 
 class InventoryReportResponse(BaseModel):

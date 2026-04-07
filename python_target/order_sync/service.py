@@ -19,7 +19,7 @@ Migration notes:
 import logging
 import uuid
 from datetime import date
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from typing import Optional
 
 from .models import (
@@ -126,7 +126,11 @@ def parse_idoc_to_order(raw_segments: list[dict]) -> OrderHeader:
             qualifier = seg.get("IDDAT", "")
             date_val = seg.get("DATUM")
             if date_val and isinstance(date_val, str):
-                date_val = date.fromisoformat(date_val)
+                try:
+                    date_val = date.fromisoformat(date_val)
+                except ValueError:
+                    logger.warning("Invalid date '%s' in E1EDK03 segment", date_val)
+                    date_val = None
             if qualifier == "012":
                 header.requested_delivery_date = date_val
             elif qualifier == "022":
@@ -152,11 +156,17 @@ def parse_idoc_to_order(raw_segments: list[dict]) -> OrderHeader:
                 header.ship_to_party = partner_num
 
         elif seg_type == "E1EDP01":
+            try:
+                quantity = Decimal(str(seg.get("MENGE", 0)))
+                net_price = Decimal(str(seg.get("VPREI", 0)))
+            except (InvalidOperation, TypeError, ValueError) as exc:
+                logger.warning("Invalid numeric data in E1EDP01 segment: %s", exc)
+                continue
             current_item = OrderItem(
                 item_number=seg.get("POSEX", "000010"),
-                quantity=Decimal(str(seg.get("MENGE", 0))),
+                quantity=quantity,
                 unit_of_measure=seg.get("MENEE", "EA"),
-                net_price=Decimal(str(seg.get("VPREI", 0))),
+                net_price=net_price,
                 item_category=seg.get("PSTYV"),
                 plant=seg.get("PLANT"),
             )
@@ -225,7 +235,7 @@ def process_single_order(
             order_number=order_number,
         )
 
-    except Exception as exc:
+    except (ConnectionError, TimeoutError, OSError) as exc:
         # Replaces: CALL FUNCTION 'BAPI_TRANSACTION_ROLLBACK'
         logger.error(
             "Order creation failed for message %s: %s",
@@ -235,7 +245,17 @@ def process_single_order(
         return OrderSyncResult(
             message_id=message.message_id,
             status=OrderStatus.FAILED,
-            error_messages=[str(exc)],
+            error_messages=["Order creation failed due to a system error"],
+        )
+    except Exception:
+        logger.exception(
+            "Unexpected error processing message %s",
+            message.message_id,
+        )
+        return OrderSyncResult(
+            message_id=message.message_id,
+            status=OrderStatus.FAILED,
+            error_messages=["An unexpected internal error occurred"],
         )
 
 
