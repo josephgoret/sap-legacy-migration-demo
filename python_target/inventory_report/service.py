@@ -127,6 +127,12 @@ def generate_inventory_report(
     items: list[InventoryItem] = []
 
     for row in raw_data:
+        # Validate required fields before accessing them
+        if "material_number" not in row:
+            raise ValueError("Row missing required field 'material_number'")
+        if "plant" not in row:
+            raise ValueError("Row missing required field 'plant'")
+
         available = Decimal(str(row.get("available_stock", 0)))
         inspection = Decimal(str(row.get("inspection_stock", 0)))
         blocked = Decimal(str(row.get("blocked_stock", 0)))
