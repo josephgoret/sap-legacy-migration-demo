@@ -13,7 +13,7 @@ Migration notes:
 """
 
 from datetime import UTC, date, datetime, timedelta
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from typing import Optional
 
 from .models import (
@@ -23,6 +23,12 @@ from .models import (
     InventoryReportSummary,
     StockStatus,
 )
+
+# Maximum number of rows accepted in a single report request to prevent DoS.
+MAX_RAW_DATA_ROWS = 10_000
+
+# Upper bound for monetary / quantity values to reject absurd inputs.
+_MAX_DECIMAL_VALUE = Decimal("999999999999")
 
 
 def calculate_stock_status(
@@ -109,6 +115,25 @@ def build_summary(items: list[InventoryItem]) -> InventoryReportSummary:
     return summary
 
 
+def _safe_decimal(value: object, field_name: str) -> Decimal:
+    """Convert *value* to Decimal with range validation.
+
+    Raises ``ValueError`` for values that are out of a sane range or
+    cannot be parsed, preventing memory-exhaustion attacks via
+    extremely large exponents.
+    """
+    try:
+        result = Decimal(str(value))
+    except (InvalidOperation, ValueError) as exc:
+        raise ValueError(f"Invalid decimal value for {field_name}: {value!r}") from exc
+    if abs(result) > _MAX_DECIMAL_VALUE:
+        raise ValueError(
+            f"{field_name} value {result} exceeds allowed range "
+            f"(+/-{_MAX_DECIMAL_VALUE})"
+        )
+    return result
+
+
 def generate_inventory_report(
     raw_data: list[dict],
     filters: InventoryFilters,
@@ -122,15 +147,25 @@ def generate_inventory_report(
 
     Returns:
         Complete report response with items, summary, and metadata.
+
+    Raises:
+        ValueError: If *raw_data* exceeds ``MAX_RAW_DATA_ROWS`` or contains
+            invalid numeric values.
     """
+    if len(raw_data) > MAX_RAW_DATA_ROWS:
+        raise ValueError(
+            f"raw_data contains {len(raw_data)} rows, "
+            f"exceeding the maximum of {MAX_RAW_DATA_ROWS}"
+        )
+
     today = date.today()
     items: list[InventoryItem] = []
 
     for row in raw_data:
-        available = Decimal(str(row.get("available_stock", 0)))
-        inspection = Decimal(str(row.get("inspection_stock", 0)))
-        blocked = Decimal(str(row.get("blocked_stock", 0)))
-        reorder = Decimal(str(row.get("reorder_point", 0)))
+        available = _safe_decimal(row.get("available_stock", 0), "available_stock")
+        inspection = _safe_decimal(row.get("inspection_stock", 0), "inspection_stock")
+        blocked = _safe_decimal(row.get("blocked_stock", 0), "blocked_stock")
+        reorder = _safe_decimal(row.get("reorder_point", 0), "reorder_point")
         total = available + inspection + blocked
 
         last_receipt = row.get("last_receipt_date")
@@ -147,7 +182,7 @@ def generate_inventory_report(
         pct = calculate_stock_percentage(available, reorder)
 
         # Stock value — simplified (production would join MBEW for moving avg price)
-        unit_cost = Decimal(str(row.get("unit_cost", 10)))
+        unit_cost = _safe_decimal(row.get("unit_cost", 10), "unit_cost")
         stock_value = total * unit_cost
 
         item = InventoryItem(
