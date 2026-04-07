@@ -13,8 +13,8 @@ Migration notes:
 """
 
 from datetime import date, timedelta
-from decimal import Decimal
-from typing import Optional
+from decimal import Decimal, InvalidOperation
+from typing import Callable, Optional
 
 from .models import (
     PurchaseOrderItem,
@@ -38,6 +38,24 @@ class AuthorizationError(Exception):
     def __init__(self, company_code: str) -> None:
         self.company_code = company_code
         super().__init__(f"Authorization failed for company code {company_code}")
+
+
+# Upper bound for monetary / quantity values to reject absurd inputs.
+_MAX_DECIMAL_VALUE = Decimal("999999999999")
+
+
+def _safe_decimal(value: object, field_name: str) -> Decimal:
+    """Convert *value* to Decimal with range validation."""
+    try:
+        result = Decimal(str(value))
+    except (InvalidOperation, ValueError) as exc:
+        raise ValueError(f"Invalid decimal value for {field_name}: {value!r}") from exc
+    if abs(result) > _MAX_DECIMAL_VALUE:
+        raise ValueError(
+            f"{field_name} value {result} exceeds allowed range "
+            f"(+/-{_MAX_DECIMAL_VALUE})"
+        )
+    return result
 
 
 def calculate_po_aggregates(
@@ -64,6 +82,7 @@ def lookup_vendor(
     request: VendorLookupRequest,
     vendor_data: Optional[dict],
     po_data: list[dict],
+    auth_check: Optional[Callable[[str], None]] = None,
 ) -> VendorLookupResponse:
     """Main lookup logic — replaces the ABAP function module body.
 
@@ -72,13 +91,20 @@ def lookup_vendor(
         vendor_data: Vendor master record from data warehouse.
                      None if vendor not found.
         po_data:     Purchase order line items from data warehouse.
+        auth_check:  Optional authorization callback.  Receives the company
+                     code and must raise ``AuthorizationError`` if the caller
+                     is not permitted.  Maps to ABAP ``AUTHORITY-CHECK``.
 
     Returns:
         VendorLookupResponse with vendor details and PO history.
 
     Raises:
         VendorNotFoundError: If vendor_data is None.
+        AuthorizationError:  If *auth_check* rejects the request.
     """
+    # Authorization check — maps to ABAP: AUTHORITY-CHECK OBJECT 'F_BKPF_BUK'
+    if auth_check is not None:
+        auth_check(request.company_code)
     # Vendor not found check — maps to ABAP: IF sy-subrc <> 0. RAISE vendor_not_found.
     if vendor_data is None:
         raise VendorNotFoundError(request.vendor_number)
@@ -123,9 +149,9 @@ def lookup_vendor(
             po_date=po_date,
             material_number=row.get("material_number"),
             short_text=row.get("short_text"),
-            quantity=Decimal(str(row.get("quantity", 0))),
+            quantity=_safe_decimal(row.get("quantity", 0), "quantity"),
             unit_of_measure=row.get("unit_of_measure", "EA"),
-            net_price=Decimal(str(row.get("net_price", 0))),
+            net_price=_safe_decimal(row.get("net_price", 0), "net_price"),
             currency=row.get("currency", "USD"),
             delivery_completed=row.get("delivery_completed", False),
             purchase_requisition=row.get("purchase_requisition"),

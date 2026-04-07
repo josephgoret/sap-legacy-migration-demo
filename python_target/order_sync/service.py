@@ -17,9 +17,10 @@ Migration notes:
 """
 
 import logging
+import re
 import uuid
 from datetime import date
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from typing import Optional
 
 from .models import (
@@ -34,6 +35,19 @@ from .models import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Maximum number of messages in a single batch to prevent DoS.
+MAX_BATCH_SIZE = 1000
+
+# Regex to strip characters that could be used for log injection.
+_LOG_SANITIZE_RE = re.compile(r"[\r\n\x1b]")
+
+
+class OrderCreationError(Exception):
+    """Raised when the target system fails to create an order.
+
+    Replaces ABAP: BAPI returns errors → BAPI_TRANSACTION_ROLLBACK.
+    """
 
 
 class OrderValidationError(Exception):
@@ -191,12 +205,14 @@ def process_single_order(
     """
     order = message.order
 
+    safe_msg_id = _sanitize_for_log(message.message_id)
+
     # Validate — replaces ABAP validation checks before BAPI call
     errors = validate_order(order)
     if errors:
         logger.warning(
             "Order validation failed for message %s: %s",
-            message.message_id,
+            safe_msg_id,
             errors,
         )
         return OrderSyncResult(
@@ -213,8 +229,8 @@ def process_single_order(
         logger.info(
             "Order %s created for message %s (sold-to: %s, %d items)",
             order_number,
-            message.message_id,
-            order.sold_to_party,
+            safe_msg_id,
+            _sanitize_for_log(order.sold_to_party),
             len(order.items),
         )
 
@@ -225,12 +241,12 @@ def process_single_order(
             order_number=order_number,
         )
 
-    except Exception as exc:
+    except OrderCreationError as exc:
         # Replaces: CALL FUNCTION 'BAPI_TRANSACTION_ROLLBACK'
         logger.error(
             "Order creation failed for message %s: %s",
-            message.message_id,
-            exc,
+            safe_msg_id,
+            _sanitize_for_log(str(exc)),
         )
         return OrderSyncResult(
             message_id=message.message_id,
@@ -247,6 +263,11 @@ def process_order_batch(
     Replaces the outer LOOP AT idoc_contrl in the ABAP function module.
     Each message is processed independently (matches IDoc-by-IDoc processing).
     """
+    if len(messages) > MAX_BATCH_SIZE:
+        raise ValueError(
+            f"Batch size {len(messages)} exceeds maximum of {MAX_BATCH_SIZE}"
+        )
+
     results: list[OrderSyncResult] = []
 
     for message in messages:
@@ -264,6 +285,11 @@ def process_order_batch(
     )
 
 
+def _sanitize_for_log(value: str) -> str:
+    """Strip newlines and ANSI escapes to prevent log injection."""
+    return _LOG_SANITIZE_RE.sub("_", value)
+
+
 def _create_order_in_target_system(order: OrderHeader) -> str:
     """Simulate creating an order in the target system.
 
@@ -271,6 +297,9 @@ def _create_order_in_target_system(order: OrderHeader) -> str:
     For the demo, generates a synthetic order number.
 
     Replaces: CALL FUNCTION 'BAPI_SALESORDER_CREATEFROMDAT2' ... IMPORTING salesdocument = lv_vbeln
+
+    Raises:
+        OrderCreationError: If the target system rejects the order.
     """
     # Generate a 10-digit order number (similar to SAP VBELN format)
     order_number = str(uuid.uuid4().int)[:10].zfill(10)
