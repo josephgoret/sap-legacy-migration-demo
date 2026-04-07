@@ -48,6 +48,14 @@ class OrderValidationError(Exception):
         super().__init__(f"Validation failed for {message_id}: {'; '.join(errors)}")
 
 
+class OrderCreationError(Exception):
+    """Raised when the target system fails to create an order.
+
+    Replaces ABAP: BAPI return with type 'E' or 'A' after
+    CALL FUNCTION 'BAPI_SALESORDER_CREATEFROMDAT2'.
+    """
+
+
 def validate_order(order: OrderHeader) -> list[str]:
     """Validate parsed order data before processing.
 
@@ -225,7 +233,7 @@ def process_single_order(
             order_number=order_number,
         )
 
-    except Exception as exc:
+    except OrderCreationError as exc:
         # Replaces: CALL FUNCTION 'BAPI_TRANSACTION_ROLLBACK'
         logger.error(
             "Order creation failed for message %s: %s",

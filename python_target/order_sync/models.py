@@ -35,27 +35,27 @@ class OrderPartner(BaseModel):
     """Partner in the order — maps to BAPIPARNR / E1EDKA1 segment."""
 
     role: PartnerRole = Field(description="Partner function (PARVW)")
-    number: str = Field(description="Partner number (PARTN)")
+    number: str = Field(max_length=20, description="Partner number (PARTN)")
 
 
 class OrderItem(BaseModel):
     """Order line item — maps to E1EDP01 + E1EDP19 segments / BAPISDITM."""
 
-    item_number: str = Field(description="Item number (POSEX)")
+    item_number: str = Field(max_length=10, description="Item number (POSEX)")
     material_number: Optional[str] = Field(
-        default=None, description="SAP material number from E1EDP19 qualifier 002"
+        default=None, max_length=40, description="SAP material number from E1EDP19 qualifier 002"
     )
     customer_material: Optional[str] = Field(
-        default=None, description="Customer material number from E1EDP19 qualifier 003"
+        default=None, max_length=40, description="Customer material number from E1EDP19 qualifier 003"
     )
-    plant: Optional[str] = Field(default=None, description="Delivering plant")
+    plant: Optional[str] = Field(default=None, max_length=10, description="Delivering plant")
     quantity: Decimal = Field(description="Order quantity (MENGE)")
-    unit_of_measure: str = Field(default="EA", description="Unit of measure (MENEE)")
+    unit_of_measure: str = Field(default="EA", max_length=10, description="Unit of measure (MENEE)")
     net_price: Decimal = Field(
         default=Decimal("0"), description="Net price (VPREI)"
     )
     item_category: Optional[str] = Field(
-        default=None, description="Item category (PSTYV)"
+        default=None, max_length=10, description="Item category (PSTYV)"
     )
 
 
@@ -68,17 +68,17 @@ class OrderHeader(BaseModel):
     """
 
     document_type: str = Field(
-        default="ZOR", description="Sales document type (BSART/AUART)"
+        default="ZOR", max_length=10, description="Sales document type (BSART/AUART)"
     )
-    sales_org: str = Field(description="Sales organization")
-    distribution_channel: str = Field(description="Distribution channel")
-    division: str = Field(description="Division")
-    sold_to_party: str = Field(description="Sold-to customer number")
+    sales_org: str = Field(max_length=10, description="Sales organization")
+    distribution_channel: str = Field(max_length=10, description="Distribution channel")
+    division: str = Field(max_length=10, description="Division")
+    sold_to_party: str = Field(max_length=20, description="Sold-to customer number")
     ship_to_party: Optional[str] = Field(
-        default=None, description="Ship-to customer number"
+        default=None, max_length=20, description="Ship-to customer number"
     )
     customer_po_number: Optional[str] = Field(
-        default=None, description="Customer PO reference (BSTKD)"
+        default=None, max_length=40, description="Customer PO reference (BSTKD)"
     )
     customer_po_date: Optional[date] = Field(
         default=None, description="Customer PO date"
@@ -87,15 +87,15 @@ class OrderHeader(BaseModel):
         default=None, description="Requested delivery date"
     )
     pricing_date: Optional[date] = Field(default=None, description="Pricing date")
-    currency: str = Field(default="USD", description="Document currency (CURCY)")
+    currency: str = Field(default="USD", max_length=5, description="Document currency (CURCY)")
     incoterms1: Optional[str] = Field(
-        default=None, description="Incoterms part 1 (e.g., FOB)"
+        default=None, max_length=10, description="Incoterms part 1 (e.g., FOB)"
     )
     incoterms2: Optional[str] = Field(
-        default=None, description="Incoterms part 2 (location)"
+        default=None, max_length=100, description="Incoterms part 2 (location)"
     )
-    partners: list[OrderPartner] = Field(default_factory=list)
-    items: list[OrderItem] = Field(default_factory=list)
+    partners: list[OrderPartner] = Field(default_factory=list, max_length=20)
+    items: list[OrderItem] = Field(default_factory=list, max_length=999)
 
 
 class InboundOrderMessage(BaseModel):
@@ -105,12 +105,12 @@ class InboundOrderMessage(BaseModel):
     In the migrated system, this is a JSON message received from a message queue.
     """
 
-    message_id: str = Field(description="Unique message ID (replaces IDoc DOCNUM)")
+    message_id: str = Field(max_length=50, description="Unique message ID (replaces IDoc DOCNUM)")
     message_type: str = Field(
-        default="ORDERS", description="Message type (replaces MESTYP)"
+        default="ORDERS", max_length=20, description="Message type (replaces MESTYP)"
     )
     sender_system: Optional[str] = Field(
-        default=None, description="Sending system identifier"
+        default=None, max_length=50, description="Sending system identifier"
     )
     order: OrderHeader = Field(description="Parsed order data")
 
