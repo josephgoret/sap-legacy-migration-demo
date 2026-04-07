@@ -12,9 +12,10 @@ Migration notes:
 - BAPI-style return code → HTTP status codes + response body
 """
 
+import logging
 from datetime import date, timedelta
-from decimal import Decimal
-from typing import Optional
+from decimal import Decimal, InvalidOperation
+from typing import Callable, Optional
 
 from .models import (
     PurchaseOrderItem,
@@ -22,6 +23,8 @@ from .models import (
     VendorLookupRequest,
     VendorLookupResponse,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class VendorNotFoundError(Exception):
@@ -64,6 +67,7 @@ def lookup_vendor(
     request: VendorLookupRequest,
     vendor_data: Optional[dict],
     po_data: list[dict],
+    auth_check: Optional[Callable[[str], None]] = None,
 ) -> VendorLookupResponse:
     """Main lookup logic — replaces the ABAP function module body.
 
@@ -72,13 +76,21 @@ def lookup_vendor(
         vendor_data: Vendor master record from data warehouse.
                      None if vendor not found.
         po_data:     Purchase order line items from data warehouse.
+        auth_check:  Optional authorization callback. Receives the company code
+                     and should raise AuthorizationError if the caller is not
+                     authorized. Mirrors ABAP AUTHORITY-CHECK OBJECT 'F_LFA1_BUK'.
+                     Production deployments MUST supply this parameter.
 
     Returns:
         VendorLookupResponse with vendor details and PO history.
 
     Raises:
         VendorNotFoundError: If vendor_data is None.
+        AuthorizationError: If auth_check rejects the company code.
     """
+    # Authorization check — mirrors ABAP AUTHORITY-CHECK
+    if auth_check is not None:
+        auth_check(request.company_code)
     # Vendor not found check — maps to ABAP: IF sy-subrc <> 0. RAISE vendor_not_found.
     if vendor_data is None:
         raise VendorNotFoundError(request.vendor_number)
@@ -111,21 +123,44 @@ def lookup_vendor(
     for row in po_data:
         po_date = row.get("po_date")
         if isinstance(po_date, str):
-            po_date = date.fromisoformat(po_date)
+            try:
+                po_date = date.fromisoformat(po_date)
+            except ValueError:
+                logger.warning("Invalid po_date '%s', skipping PO row", po_date)
+                continue
 
         # Apply date filter (matches ABAP: WHERE h~bedat >= lv_date_from)
         if po_date is not None and po_date < date_from:
             continue
 
+        po_number = row.get("po_number")
+        po_item = row.get("po_item")
+        if not po_number or not po_item or po_date is None:
+            logger.warning(
+                "Skipping PO row missing required fields "
+                "(po_number=%s, po_item=%s, po_date=%s)",
+                po_number,
+                po_item,
+                po_date,
+            )
+            continue
+
+        try:
+            quantity = Decimal(str(row.get("quantity", 0)))
+            net_price = Decimal(str(row.get("net_price", 0)))
+        except (InvalidOperation, TypeError, ValueError) as exc:
+            logger.warning("Skipping PO row with invalid numeric data: %s", exc)
+            continue
+
         item = PurchaseOrderItem(
-            po_number=row["po_number"],
-            po_item=row["po_item"],
+            po_number=po_number,
+            po_item=po_item,
             po_date=po_date,
             material_number=row.get("material_number"),
             short_text=row.get("short_text"),
-            quantity=Decimal(str(row.get("quantity", 0))),
+            quantity=quantity,
             unit_of_measure=row.get("unit_of_measure", "EA"),
-            net_price=Decimal(str(row.get("net_price", 0))),
+            net_price=net_price,
             currency=row.get("currency", "USD"),
             delivery_completed=row.get("delivery_completed", False),
             purchase_requisition=row.get("purchase_requisition"),

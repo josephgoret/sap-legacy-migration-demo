@@ -12,8 +12,9 @@ Migration notes:
 - Selection screen → query parameters / request body
 """
 
-from datetime import UTC, date, datetime, timedelta
-from decimal import Decimal
+import logging
+from datetime import UTC, date, datetime
+from decimal import Decimal, InvalidOperation
 from typing import Optional
 
 from .models import (
@@ -23,6 +24,8 @@ from .models import (
     InventoryReportSummary,
     StockStatus,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def calculate_stock_status(
@@ -127,15 +130,29 @@ def generate_inventory_report(
     items: list[InventoryItem] = []
 
     for row in raw_data:
-        available = Decimal(str(row.get("available_stock", 0)))
-        inspection = Decimal(str(row.get("inspection_stock", 0)))
-        blocked = Decimal(str(row.get("blocked_stock", 0)))
-        reorder = Decimal(str(row.get("reorder_point", 0)))
+        try:
+            available = Decimal(str(row.get("available_stock", 0)))
+            inspection = Decimal(str(row.get("inspection_stock", 0)))
+            blocked = Decimal(str(row.get("blocked_stock", 0)))
+            reorder = Decimal(str(row.get("reorder_point", 0)))
+        except (InvalidOperation, TypeError, ValueError) as exc:
+            logger.warning(
+                "Skipping row with invalid numeric data: %s", exc
+            )
+            continue
+
         total = available + inspection + blocked
 
         last_receipt = row.get("last_receipt_date")
         if isinstance(last_receipt, str):
-            last_receipt = date.fromisoformat(last_receipt)
+            try:
+                last_receipt = date.fromisoformat(last_receipt)
+            except ValueError:
+                logger.warning(
+                    "Invalid last_receipt_date '%s', treating as None",
+                    last_receipt,
+                )
+                last_receipt = None
 
         status = calculate_stock_status(
             available_stock=available,
@@ -147,22 +164,41 @@ def generate_inventory_report(
         pct = calculate_stock_percentage(available, reorder)
 
         # Stock value — simplified (production would join MBEW for moving avg price)
-        unit_cost = Decimal(str(row.get("unit_cost", 10)))
+        try:
+            unit_cost = Decimal(str(row.get("unit_cost", 10)))
+        except (InvalidOperation, TypeError, ValueError):
+            unit_cost = Decimal("10")
         stock_value = total * unit_cost
 
+        material_number = row.get("material_number")
+        plant = row.get("plant")
+        if not material_number or not plant:
+            logger.warning(
+                "Skipping row missing required fields "
+                "(material_number=%s, plant=%s)",
+                material_number,
+                plant,
+            )
+            continue
+
+        try:
+            max_stock = Decimal(str(row.get("max_stock_level", 0)))
+        except (InvalidOperation, TypeError, ValueError):
+            max_stock = Decimal("0")
+
         item = InventoryItem(
-            material_number=row["material_number"],
+            material_number=material_number,
             description=row.get("description", ""),
             material_type=row.get("material_type", ""),
             material_group=row.get("material_group", ""),
-            plant=row["plant"],
+            plant=plant,
             storage_location=row.get("storage_location", ""),
             available_stock=available,
             inspection_stock=inspection,
             blocked_stock=blocked,
             total_stock=total,
             reorder_point=reorder,
-            max_stock_level=Decimal(str(row.get("max_stock_level", 0))),
+            max_stock_level=max_stock,
             stock_status=status,
             stock_percentage=pct,
             last_receipt_date=last_receipt,

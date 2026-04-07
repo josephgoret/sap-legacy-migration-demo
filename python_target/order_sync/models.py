@@ -49,10 +49,10 @@ class OrderItem(BaseModel):
         default=None, description="Customer material number from E1EDP19 qualifier 003"
     )
     plant: Optional[str] = Field(default=None, description="Delivering plant")
-    quantity: Decimal = Field(description="Order quantity (MENGE)")
+    quantity: Decimal = Field(ge=0, description="Order quantity (MENGE)")
     unit_of_measure: str = Field(default="EA", description="Unit of measure (MENEE)")
     net_price: Decimal = Field(
-        default=Decimal("0"), description="Net price (VPREI)"
+        default=Decimal("0"), ge=0, description="Net price (VPREI)"
     )
     item_category: Optional[str] = Field(
         default=None, description="Item category (PSTYV)"
