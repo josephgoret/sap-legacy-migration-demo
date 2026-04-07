@@ -225,8 +225,9 @@ def process_single_order(
             order_number=order_number,
         )
 
-    except Exception as exc:
+    except (ValueError, RuntimeError) as exc:
         # Replaces: CALL FUNCTION 'BAPI_TRANSACTION_ROLLBACK'
+        # Only catch expected error types from target system integration.
         logger.error(
             "Order creation failed for message %s: %s",
             message.message_id,
@@ -236,6 +237,19 @@ def process_single_order(
             message_id=message.message_id,
             status=OrderStatus.FAILED,
             error_messages=[str(exc)],
+        )
+
+    except Exception:
+        # Unexpected errors are logged but not exposed to callers to
+        # avoid leaking internal details (CWE-209).
+        logger.exception(
+            "Unexpected error processing message %s",
+            message.message_id,
+        )
+        return OrderSyncResult(
+            message_id=message.message_id,
+            status=OrderStatus.FAILED,
+            error_messages=["Internal error — see server logs for details"],
         )
 
 

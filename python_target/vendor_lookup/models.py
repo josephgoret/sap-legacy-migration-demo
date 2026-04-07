@@ -18,29 +18,29 @@ class VendorDetail(BaseModel):
     Combines data from LFA1 (general), LFB1 (company code), ADR6 (email).
     """
 
-    vendor_number: str = Field(description="Vendor account number (LIFNR)")
-    name1: str = Field(description="Name line 1 (NAME1)")
-    name2: Optional[str] = Field(default=None, description="Name line 2 (NAME2)")
-    street: Optional[str] = Field(default=None, description="Street address (STRAS)")
-    city: Optional[str] = Field(default=None, description="City (ORT01)")
-    region: Optional[str] = Field(default=None, description="Region/state (REGIO)")
-    postal_code: Optional[str] = Field(default=None, description="Postal code (PSTLZ)")
-    country: Optional[str] = Field(default=None, description="Country key (LAND1)")
-    phone: Optional[str] = Field(default=None, description="Telephone (TELF1)")
-    fax: Optional[str] = Field(default=None, description="Fax number (TELFX)")
+    vendor_number: str = Field(max_length=20, description="Vendor account number (LIFNR)")
+    name1: str = Field(max_length=70, description="Name line 1 (NAME1)")
+    name2: Optional[str] = Field(default=None, max_length=70, description="Name line 2 (NAME2)")
+    street: Optional[str] = Field(default=None, max_length=60, description="Street address (STRAS)")
+    city: Optional[str] = Field(default=None, max_length=40, description="City (ORT01)")
+    region: Optional[str] = Field(default=None, max_length=10, description="Region/state (REGIO)")
+    postal_code: Optional[str] = Field(default=None, max_length=20, description="Postal code (PSTLZ)")
+    country: Optional[str] = Field(default=None, max_length=3, description="Country key (LAND1)")
+    phone: Optional[str] = Field(default=None, max_length=30, description="Telephone (TELF1)")
+    fax: Optional[str] = Field(default=None, max_length=30, description="Fax number (TELFX)")
     email: Optional[str] = Field(
-        default=None, description="Email address (ADR6-SMTP_ADDR)"
+        default=None, max_length=241, description="Email address (ADR6-SMTP_ADDR)"
     )
     account_group: Optional[str] = Field(
-        default=None, description="Vendor account group (KTOKK)"
+        default=None, max_length=10, description="Vendor account group (KTOKK)"
     )
     payment_terms: Optional[str] = Field(
-        default=None, description="Payment terms key (ZTERM)"
+        default=None, max_length=10, description="Payment terms key (ZTERM)"
     )
     recon_account: Optional[str] = Field(
-        default=None, description="Reconciliation account (AKONT)"
+        default=None, max_length=20, description="Reconciliation account (AKONT)"
     )
-    currency: str = Field(default="USD", description="Currency (WAERS)")
+    currency: str = Field(default="USD", max_length=5, description="Currency (WAERS)")
     is_blocked: bool = Field(default=False, description="Central block flag (SPERR)")
     is_deleted: bool = Field(
         default=False, description="Deletion flag (LOEVM)"
@@ -56,33 +56,33 @@ class VendorDetail(BaseModel):
 class PurchaseOrderItem(BaseModel):
     """Purchase order line item — maps to ABAP ty_po_history structure."""
 
-    po_number: str = Field(description="Purchase order number (EBELN)")
-    po_item: str = Field(description="PO item number (EBELP)")
+    po_number: str = Field(max_length=20, description="Purchase order number (EBELN)")
+    po_item: str = Field(max_length=10, description="PO item number (EBELP)")
     po_date: date = Field(description="PO document date (BEDAT)")
     material_number: Optional[str] = Field(
-        default=None, description="Material number (MATNR)"
+        default=None, max_length=40, description="Material number (MATNR)"
     )
     short_text: Optional[str] = Field(
-        default=None, description="Item short text (TXZ01)"
+        default=None, max_length=80, description="Item short text (TXZ01)"
     )
     quantity: Decimal = Field(description="Order quantity (MENGE)")
-    unit_of_measure: str = Field(description="Unit of measure (MEINS)")
+    unit_of_measure: str = Field(max_length=5, description="Unit of measure (MEINS)")
     net_price: Decimal = Field(description="Net price per unit (NETPR)")
-    currency: str = Field(default="USD", description="PO currency (WAERS)")
+    currency: str = Field(default="USD", max_length=5, description="PO currency (WAERS)")
     delivery_completed: bool = Field(
         default=False, description="Delivery completed flag (ELIKZ)"
     )
     purchase_requisition: Optional[str] = Field(
-        default=None, description="Purchase requisition number (BANFN)"
+        default=None, max_length=20, description="Purchase requisition number (BANFN)"
     )
 
 
 class VendorLookupRequest(BaseModel):
     """Input parameters — maps to ABAP function module IMPORTING parameters."""
 
-    vendor_number: str = Field(description="Vendor number (IV_LIFNR)")
+    vendor_number: str = Field(max_length=20, description="Vendor number (IV_LIFNR)")
     company_code: str = Field(
-        default="1000", description="Company code (IV_BUKRS)"
+        default="1000", max_length=10, description="Company code (IV_BUKRS)"
     )
     max_po_items: int = Field(
         default=50, ge=1, le=500, description="Max PO items to return (IV_MAX_POS)"
