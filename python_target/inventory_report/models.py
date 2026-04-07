@@ -30,15 +30,17 @@ class StockStatus(str, Enum):
 class InventoryFilters(BaseModel):
     """Selection screen parameters — maps to ABAP selection screen block b01/b02."""
 
-    plants: list[str] = Field(default_factory=list, description="Plant codes (s_werks)")
+    plants: list[str] = Field(
+        default_factory=list, max_length=100, description="Plant codes (s_werks)"
+    )
     storage_locations: list[str] = Field(
-        default_factory=list, description="Storage location codes (s_lgort)"
+        default_factory=list, max_length=100, description="Storage location codes (s_lgort)"
     )
     material_groups: list[str] = Field(
-        default_factory=list, description="Material group codes (s_matkl)"
+        default_factory=list, max_length=100, description="Material group codes (s_matkl)"
     )
     material_types: list[str] = Field(
-        default_factory=list, description="Material type codes (s_mtart)"
+        default_factory=list, max_length=100, description="Material type codes (s_mtart)"
     )
     stale_days: int = Field(
         default=90,

@@ -14,7 +14,7 @@ Migration notes:
 
 from datetime import date, timedelta
 from decimal import Decimal
-from typing import Optional
+from typing import Callable, Optional
 
 from .models import (
     PurchaseOrderItem,
@@ -64,21 +64,32 @@ def lookup_vendor(
     request: VendorLookupRequest,
     vendor_data: Optional[dict],
     po_data: list[dict],
+    auth_checker: Optional[Callable[[str], bool]] = None,
 ) -> VendorLookupResponse:
     """Main lookup logic — replaces the ABAP function module body.
 
     Args:
-        request:     Lookup parameters (vendor number, company code, etc.)
-        vendor_data: Vendor master record from data warehouse.
-                     None if vendor not found.
-        po_data:     Purchase order line items from data warehouse.
+        request:      Lookup parameters (vendor number, company code, etc.)
+        vendor_data:  Vendor master record from data warehouse.
+                      None if vendor not found.
+        po_data:      Purchase order line items from data warehouse.
+        auth_checker: Callback that receives the company code and returns
+                      True if the caller is authorized.  Maps to ABAP
+                      AUTHORITY-CHECK OBJECT 'F_LFA1_BUK'.  When None
+                      the check is skipped (for tests / trusted internal
+                      callers only).
 
     Returns:
         VendorLookupResponse with vendor details and PO history.
 
     Raises:
+        AuthorizationError: If auth_checker returns False.
         VendorNotFoundError: If vendor_data is None.
     """
+    # Authorization check — maps to ABAP: AUTHORITY-CHECK OBJECT 'F_LFA1_BUK'
+    if auth_checker is not None and not auth_checker(request.company_code):
+        raise AuthorizationError(request.company_code)
+
     # Vendor not found check — maps to ABAP: IF sy-subrc <> 0. RAISE vendor_not_found.
     if vendor_data is None:
         raise VendorNotFoundError(request.vendor_number)
