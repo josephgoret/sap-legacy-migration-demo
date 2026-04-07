@@ -48,6 +48,15 @@ class OrderValidationError(Exception):
         super().__init__(f"Validation failed for {message_id}: {'; '.join(errors)}")
 
 
+class OrderCreationError(Exception):
+    """Raised when the target system rejects an order creation request.
+
+    Replaces ABAP: BAPI returns error → BAPI_TRANSACTION_ROLLBACK.
+    Use this for *expected* failures from the target system so that
+    unexpected exceptions (bugs) are not silently swallowed.
+    """
+
+
 def validate_order(order: OrderHeader) -> list[str]:
     """Validate parsed order data before processing.
 
@@ -225,7 +234,7 @@ def process_single_order(
             order_number=order_number,
         )
 
-    except Exception as exc:
+    except OrderCreationError as exc:
         # Replaces: CALL FUNCTION 'BAPI_TRANSACTION_ROLLBACK'
         logger.error(
             "Order creation failed for message %s: %s",
@@ -235,7 +244,7 @@ def process_single_order(
         return OrderSyncResult(
             message_id=message.message_id,
             status=OrderStatus.FAILED,
-            error_messages=[str(exc)],
+            error_messages=["Order creation failed in target system"],
         )
 
 
