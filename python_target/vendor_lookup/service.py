@@ -64,6 +64,7 @@ def lookup_vendor(
     request: VendorLookupRequest,
     vendor_data: Optional[dict],
     po_data: list[dict],
+    authorized_company_codes: Optional[set[str]] = None,
 ) -> VendorLookupResponse:
     """Main lookup logic — replaces the ABAP function module body.
 
@@ -72,13 +73,27 @@ def lookup_vendor(
         vendor_data: Vendor master record from data warehouse.
                      None if vendor not found.
         po_data:     Purchase order line items from data warehouse.
+        authorized_company_codes: Set of company codes the caller is
+                     authorized to access.  ``None`` skips the check
+                     (for backwards-compatible / trusted internal calls).
 
     Returns:
         VendorLookupResponse with vendor details and PO history.
 
     Raises:
+        AuthorizationError: If the caller is not authorized for the
+            requested company code (mirrors ABAP AUTHORITY-CHECK
+            OBJECT 'F_LFA1_BUK').
         VendorNotFoundError: If vendor_data is None.
     """
+    # Authorization check — maps to ABAP: AUTHORITY-CHECK OBJECT 'F_LFA1_BUK'
+    #   ID 'BUKRS' FIELD iv_bukrs  ID 'ACTVT' FIELD '03'.
+    if (
+        authorized_company_codes is not None
+        and request.company_code not in authorized_company_codes
+    ):
+        raise AuthorizationError(request.company_code)
+
     # Vendor not found check — maps to ABAP: IF sy-subrc <> 0. RAISE vendor_not_found.
     if vendor_data is None:
         raise VendorNotFoundError(request.vendor_number)

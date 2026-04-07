@@ -36,6 +36,25 @@ from .models import (
 logger = logging.getLogger(__name__)
 
 
+def _mask(value: str) -> str:
+    """Mask a sensitive identifier for safe logging.
+
+    Shows the first two and last two characters, replacing the rest
+    with asterisks.  Returns '****' for very short values.
+    """
+    if len(value) <= 4:
+        return "****"
+    return f"{value[:2]}{'*' * (len(value) - 4)}{value[-2:]}"
+
+
+class OrderCreationError(Exception):
+    """Raised when the target system rejects an order creation request.
+
+    Replaces ABAP: BAPI returns with error type 'E' or 'A' →
+    BAPI_TRANSACTION_ROLLBACK.
+    """
+
+
 class OrderValidationError(Exception):
     """Raised when order data fails validation.
 
@@ -214,7 +233,7 @@ def process_single_order(
             "Order %s created for message %s (sold-to: %s, %d items)",
             order_number,
             message.message_id,
-            order.sold_to_party,
+            _mask(order.sold_to_party),
             len(order.items),
         )
 
@@ -225,7 +244,7 @@ def process_single_order(
             order_number=order_number,
         )
 
-    except Exception as exc:
+    except OrderCreationError as exc:
         # Replaces: CALL FUNCTION 'BAPI_TRANSACTION_ROLLBACK'
         logger.error(
             "Order creation failed for message %s: %s",
