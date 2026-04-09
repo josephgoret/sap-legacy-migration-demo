@@ -18,8 +18,10 @@ from python_target.order_sync.models import (
     OrderStatus,
     PartnerRole,
 )
+from python_target.order_sync.idempotency import InMemoryIdempotencyStore
 from python_target.order_sync.service import (
     OrderValidationError,
+    _create_order_in_target_system,
     parse_idoc_to_order,
     process_order_batch,
     process_single_order,
@@ -292,3 +294,82 @@ class TestProcessOrderBatch:
         assert batch_result.total_processed == 0
         assert batch_result.successful == 0
         assert batch_result.failed == 0
+
+
+# ---------------------------------------------------------------------------
+# Idempotency — deduplication of redelivered messages
+# ---------------------------------------------------------------------------
+
+class TestIdempotency:
+
+    def test_duplicate_message_returns_cached_result(self, valid_message, monkeypatch):
+        """A redelivered message should return the cached result without
+        calling _create_order_in_target_system a second time."""
+        store = InMemoryIdempotencyStore()
+
+        call_count = 0
+        original_create = _create_order_in_target_system
+
+        def counting_create(order):
+            nonlocal call_count
+            call_count += 1
+            return original_create(order)
+
+        monkeypatch.setattr(
+            "python_target.order_sync.service._create_order_in_target_system",
+            counting_create,
+        )
+
+        first_result = process_single_order(valid_message, idempotency_store=store)
+        assert first_result.status == OrderStatus.CREATED
+        assert call_count == 1
+
+        # Process the same message again — should be deduplicated
+        second_result = process_single_order(valid_message, idempotency_store=store)
+        assert second_result.status == OrderStatus.CREATED
+        assert second_result.order_number == first_result.order_number
+        assert call_count == 1  # NOT called again
+
+    def test_failed_message_is_not_cached(self, valid_message):
+        """Failed results should NOT be cached so retries can succeed."""
+        store = InMemoryIdempotencyStore()
+
+        # Make the order invalid so processing fails
+        valid_message.order.sold_to_party = ""
+
+        result = process_single_order(valid_message, idempotency_store=store)
+        assert result.status == OrderStatus.FAILED
+
+        # Nothing should be in the store
+        assert store.check(valid_message.message_id) is None
+
+    def test_no_store_backward_compatibility(self, valid_message):
+        """When no idempotency store is provided, behaviour is unchanged."""
+        result = process_single_order(valid_message)
+        assert result.status == OrderStatus.CREATED
+        assert result.order_number is not None
+
+    def test_batch_deduplicates_with_store(self, valid_order):
+        """Batch processing should deduplicate when a store is provided."""
+        store = InMemoryIdempotencyStore()
+
+        messages = [
+            InboundOrderMessage(message_id="MSG-DUP", order=valid_order),
+            InboundOrderMessage(message_id="MSG-DUP", order=valid_order),  # duplicate
+            InboundOrderMessage(message_id="MSG-UNIQUE", order=valid_order),
+        ]
+
+        batch_result = process_order_batch(messages, idempotency_store=store)
+
+        assert batch_result.total_processed == 3
+        assert batch_result.successful == 3
+
+        # Both MSG-DUP results should share the same order number
+        dup_results = [r for r in batch_result.results if r.message_id == "MSG-DUP"]
+        assert len(dup_results) == 2
+        assert dup_results[0].order_number == dup_results[1].order_number
+
+        # MSG-UNIQUE should have a different order number
+        unique_result = [r for r in batch_result.results if r.message_id == "MSG-UNIQUE"]
+        assert len(unique_result) == 1
+        assert unique_result[0].order_number != dup_results[0].order_number
