@@ -22,6 +22,7 @@ from datetime import date
 from decimal import Decimal
 from typing import Optional
 
+from .idempotency import IdempotencyStore
 from .models import (
     InboundOrderMessage,
     OrderHeader,
@@ -176,6 +177,7 @@ def parse_idoc_to_order(raw_segments: list[dict]) -> OrderHeader:
 
 def process_single_order(
     message: InboundOrderMessage,
+    idempotency_store: Optional[IdempotencyStore] = None,
 ) -> OrderSyncResult:
     """Process a single inbound order message.
 
@@ -188,7 +190,24 @@ def process_single_order(
     4. Return status
 
     For the demo, we simulate the order creation and return a result.
+
+    If *idempotency_store* is provided, already-processed message IDs are
+    detected and their cached result is returned immediately (deduplication
+    for at-least-once delivery queues).
     """
+    # --- idempotency check ---------------------------------------------------
+    if idempotency_store is not None:
+        cached = idempotency_store.check(message.message_id)
+        if cached is not None:
+            logger.info(
+                "Duplicate message %s detected — returning cached result "
+                "(order %s, status %s)",
+                message.message_id,
+                cached.order_number,
+                cached.status.value,
+            )
+            return cached
+
     order = message.order
 
     # Validate — replaces ABAP validation checks before BAPI call
@@ -219,11 +238,18 @@ def process_single_order(
         )
 
         # Replaces: CALL FUNCTION 'BAPI_TRANSACTION_COMMIT' EXPORTING wait = 'X'
-        return OrderSyncResult(
+        result = OrderSyncResult(
             message_id=message.message_id,
             status=OrderStatus.CREATED,
             order_number=order_number,
         )
+
+        # Cache successful results so redeliveries are deduplicated.
+        # Failed results are intentionally NOT cached so they can be retried.
+        if idempotency_store is not None:
+            idempotency_store.save(message.message_id, result)
+
+        return result
 
     except Exception as exc:
         # Replaces: CALL FUNCTION 'BAPI_TRANSACTION_ROLLBACK'
@@ -241,6 +267,7 @@ def process_single_order(
 
 def process_order_batch(
     messages: list[InboundOrderMessage],
+    idempotency_store: Optional[IdempotencyStore] = None,
 ) -> OrderSyncBatchResult:
     """Process a batch of inbound order messages.
 
@@ -250,7 +277,7 @@ def process_order_batch(
     results: list[OrderSyncResult] = []
 
     for message in messages:
-        result = process_single_order(message)
+        result = process_single_order(message, idempotency_store=idempotency_store)
         results.append(result)
 
     successful = sum(1 for r in results if r.status == OrderStatus.CREATED)
