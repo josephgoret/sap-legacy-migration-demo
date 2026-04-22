@@ -12,9 +12,12 @@ Migration notes:
 - BAPI-style return code → HTTP status codes + response body
 """
 
+import logging
 from datetime import date, timedelta
 from decimal import Decimal
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 from .models import (
     PurchaseOrderItem,
@@ -84,6 +87,8 @@ def lookup_vendor(
         VendorNotFoundError: If vendor_data is None.
         AuthorizationError: If the caller is not authorized for the company code.
     """
+    logger.info("hello world")
+
     # Authorization check — maps to ABAP: AUTHORITY-CHECK OBJECT 'F_LFA1_BUK'
     if authorized_company_codes is not None:
         if request.company_code not in authorized_company_codes:
