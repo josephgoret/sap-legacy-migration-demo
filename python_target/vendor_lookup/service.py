@@ -12,9 +12,12 @@ Migration notes:
 - BAPI-style return code → HTTP status codes + response body
 """
 
+import logging
 from datetime import date, timedelta
 from decimal import Decimal
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 from .models import (
     PurchaseOrderItem,
@@ -64,6 +67,7 @@ def lookup_vendor(
     request: VendorLookupRequest,
     vendor_data: Optional[dict],
     po_data: list[dict],
+    authorized_company_codes: Optional[set[str]] = None,
 ) -> VendorLookupResponse:
     """Main lookup logic — replaces the ABAP function module body.
 
@@ -72,13 +76,24 @@ def lookup_vendor(
         vendor_data: Vendor master record from data warehouse.
                      None if vendor not found.
         po_data:     Purchase order line items from data warehouse.
+        authorized_company_codes: Set of company codes the caller is authorized
+                     to access. If None, authorization is not enforced (e.g. in
+                     tests). Maps to ABAP AUTHORITY-CHECK OBJECT 'F_LFA1_BUK'.
 
     Returns:
         VendorLookupResponse with vendor details and PO history.
 
     Raises:
         VendorNotFoundError: If vendor_data is None.
+        AuthorizationError: If the caller is not authorized for the company code.
     """
+    logger.info("hello world")
+
+    # Authorization check — maps to ABAP: AUTHORITY-CHECK OBJECT 'F_LFA1_BUK'
+    if authorized_company_codes is not None:
+        if request.company_code not in authorized_company_codes:
+            raise AuthorizationError(request.company_code)
+
     # Vendor not found check — maps to ABAP: IF sy-subrc <> 0. RAISE vendor_not_found.
     if vendor_data is None:
         raise VendorNotFoundError(request.vendor_number)

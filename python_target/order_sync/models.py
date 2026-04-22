@@ -35,13 +35,13 @@ class OrderPartner(BaseModel):
     """Partner in the order — maps to BAPIPARNR / E1EDKA1 segment."""
 
     role: PartnerRole = Field(description="Partner function (PARVW)")
-    number: str = Field(description="Partner number (PARTN)")
+    number: str = Field(min_length=1, max_length=10, description="Partner number (PARTN)")
 
 
 class OrderItem(BaseModel):
     """Order line item — maps to E1EDP01 + E1EDP19 segments / BAPISDITM."""
 
-    item_number: str = Field(description="Item number (POSEX)")
+    item_number: str = Field(min_length=1, max_length=6, description="Item number (POSEX)")
     material_number: Optional[str] = Field(
         default=None, description="SAP material number from E1EDP19 qualifier 002"
     )
@@ -73,7 +73,7 @@ class OrderHeader(BaseModel):
     sales_org: str = Field(description="Sales organization")
     distribution_channel: str = Field(description="Distribution channel")
     division: str = Field(description="Division")
-    sold_to_party: str = Field(description="Sold-to customer number")
+    sold_to_party: str = Field(max_length=10, description="Sold-to customer number")
     ship_to_party: Optional[str] = Field(
         default=None, description="Ship-to customer number"
     )
@@ -105,7 +105,9 @@ class InboundOrderMessage(BaseModel):
     In the migrated system, this is a JSON message received from a message queue.
     """
 
-    message_id: str = Field(description="Unique message ID (replaces IDoc DOCNUM)")
+    message_id: str = Field(
+        min_length=1, max_length=255, description="Unique message ID (replaces IDoc DOCNUM)"
+    )
     message_type: str = Field(
         default="ORDERS", description="Message type (replaces MESTYP)"
     )
