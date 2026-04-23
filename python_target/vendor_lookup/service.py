@@ -1,20 +1,20 @@
 """
-Vendor Lookup Service — migrated from Z_RFC_VENDOR_LOOKUP.
+Vendor Lookup Service — migrated from CI_VENDOR_LOOKUP.
 
-Original ABAP: RFC-enabled function module querying LFA1/LFB1/EKKO/EKPO
-Target:        FastAPI endpoint returning structured JSON.
+Original PeopleCode: Component Interface querying PS_VENDOR, PS_VENDOR_ADDR,
+                     PS_VNDR_BANK_ACCT, PS_PO_HDR, PS_PO_LINE
+Target:              FastAPI endpoint returning structured JSON.
 
 Migration notes:
-- RFC interface → REST GET endpoint with query parameters
-- AUTHORITY-CHECK → API key / JWT middleware (not shown in service layer)
-- SAP SELECT → data warehouse query or ORM
-- ABAP RAISE exception → Python exceptions / HTTP error responses
-- BAPI-style return code → HTTP status codes + response body
+- Component Interface properties -> REST request/response models
+- PeopleCode IsUserInRole -> API key / JWT middleware (not shown in service layer)
+- PeopleCode SQLExec/CreateRowset/Fill -> data warehouse query or ORM
+- PeopleCode Error() -> Python exceptions / HTTP error responses
+- CI return code -> HTTP status codes + response body
 """
 
 from datetime import date, timedelta
 from decimal import Decimal
-from typing import Optional
 
 from .models import (
     PurchaseOrderItem,
@@ -25,19 +25,19 @@ from .models import (
 
 
 class VendorNotFoundError(Exception):
-    """Replaces ABAP RAISE vendor_not_found."""
+    """Replaces PeopleCode: Error("Vendor " | &vendorId | " not found")."""
 
-    def __init__(self, vendor_number: str) -> None:
-        self.vendor_number = vendor_number
-        super().__init__(f"Vendor {vendor_number} not found")
+    def __init__(self, vendor_id: str) -> None:
+        self.vendor_id = vendor_id
+        super().__init__(f"Vendor {vendor_id} not found")
 
 
 class AuthorizationError(Exception):
-    """Replaces ABAP RAISE authorization_failed."""
+    """Replaces PeopleCode: IsUserInRole check failure."""
 
-    def __init__(self, company_code: str) -> None:
-        self.company_code = company_code
-        super().__init__(f"Authorization failed for company code {company_code}")
+    def __init__(self, user: str) -> None:
+        self.user = user
+        super().__init__(f"Authorization failed for user {user}")
 
 
 def calculate_po_aggregates(
@@ -45,16 +45,16 @@ def calculate_po_aggregates(
 ) -> tuple[Decimal, int]:
     """Calculate total PO value and open PO count.
 
-    Matches ABAP LOOP AT lt_po_hist aggregation logic:
-      lv_total = lv_total + ( ls_po-netpr * ls_po-menge )
-      IF ls_po-elikz = ' '. lv_open = lv_open + 1.
+    Matches PeopleCode aggregation loop:
+      &totalPOValue = &totalPOValue + (&recPO.PRICE_PO.Value * &recPO.QTY_PO.Value)
+      If &recPO.RECV_STATUS.Value <> "F" And &recPO.CANCEL_STATUS.Value <> "X"
     """
     total_value = Decimal("0")
     open_count = 0
 
     for item in po_items:
-        total_value += item.net_price * item.quantity
-        if not item.delivery_completed:
+        total_value += item.price * item.quantity
+        if item.receive_status != "F" and item.cancel_status != "X":
             open_count += 1
 
     return total_value, open_count
@@ -62,15 +62,14 @@ def calculate_po_aggregates(
 
 def lookup_vendor(
     request: VendorLookupRequest,
-    vendor_data: Optional[dict],
+    vendor_data: dict | None,
     po_data: list[dict],
 ) -> VendorLookupResponse:
-    """Main lookup logic — replaces the ABAP function module body.
+    """Main lookup logic — replaces the Component Interface OnExecute body.
 
     Args:
-        request:     Lookup parameters (vendor number, company code, etc.)
-        vendor_data: Vendor master record from data warehouse.
-                     None if vendor not found.
+        request:     Lookup parameters (vendor ID, set ID, etc.)
+        vendor_data: Vendor master record from data warehouse. None if not found.
         po_data:     Purchase order line items from data warehouse.
 
     Returns:
@@ -79,32 +78,31 @@ def lookup_vendor(
     Raises:
         VendorNotFoundError: If vendor_data is None.
     """
-    # Vendor not found check — maps to ABAP: IF sy-subrc <> 0. RAISE vendor_not_found.
+    # Vendor not found — maps to PeopleCode: If &rsVendor.ActiveRowCount = 0
     if vendor_data is None:
-        raise VendorNotFoundError(request.vendor_number)
+        raise VendorNotFoundError(request.vendor_id)
 
-    # Build vendor detail
     vendor = VendorDetail(
-        vendor_number=vendor_data["vendor_number"],
+        vendor_id=vendor_data["vendor_id"],
         name1=vendor_data.get("name1", ""),
         name2=vendor_data.get("name2"),
-        street=vendor_data.get("street"),
+        vendor_status=vendor_data.get("vendor_status", "A"),
+        vendor_class=vendor_data.get("vendor_class"),
+        address1=vendor_data.get("address1"),
+        address2=vendor_data.get("address2"),
         city=vendor_data.get("city"),
-        region=vendor_data.get("region"),
-        postal_code=vendor_data.get("postal_code"),
+        state=vendor_data.get("state"),
+        postal=vendor_data.get("postal"),
         country=vendor_data.get("country"),
         phone=vendor_data.get("phone"),
         fax=vendor_data.get("fax"),
         email=vendor_data.get("email"),
-        account_group=vendor_data.get("account_group"),
-        payment_terms=vendor_data.get("payment_terms"),
-        recon_account=vendor_data.get("recon_account"),
-        currency=vendor_data.get("currency", "USD"),
-        is_blocked=vendor_data.get("is_blocked", False),
-        is_deleted=vendor_data.get("is_deleted", False),
+        bank_code=vendor_data.get("bank_code"),
+        bank_account_type=vendor_data.get("bank_account_type"),
+        beneficiary_name=vendor_data.get("beneficiary_name"),
     )
 
-    # Build PO history — maps to ABAP SELECT from EKKO/EKPO
+    # Build PO history — maps to PeopleCode SELECT from PS_PO_HDR/PS_PO_LINE
     date_from = request.date_from or (date.today() - timedelta(days=365))
 
     po_items: list[PurchaseOrderItem] = []
@@ -113,30 +111,30 @@ def lookup_vendor(
         if isinstance(po_date, str):
             po_date = date.fromisoformat(po_date)
 
-        # Apply date filter (matches ABAP: WHERE h~bedat >= lv_date_from)
+        # Apply date filter — matches PeopleCode: WHERE PH.PO_DT >= &dateFrom
         if po_date is not None and po_date < date_from:
             continue
 
         item = PurchaseOrderItem(
-            po_number=row["po_number"],
-            po_item=row["po_item"],
+            po_id=row["po_id"],
+            line_number=row["line_number"],
             po_date=po_date,
-            material_number=row.get("material_number"),
-            short_text=row.get("short_text"),
+            item_id=row.get("item_id"),
+            description=row.get("description"),
             quantity=Decimal(str(row.get("quantity", 0))),
             unit_of_measure=row.get("unit_of_measure", "EA"),
-            net_price=Decimal(str(row.get("net_price", 0))),
+            price=Decimal(str(row.get("price", 0))),
             currency=row.get("currency", "USD"),
-            delivery_completed=row.get("delivery_completed", False),
-            purchase_requisition=row.get("purchase_requisition"),
+            receive_status=row.get("receive_status", "N"),
+            cancel_status=row.get("cancel_status", ""),
+            requisition_id=row.get("requisition_id"),
         )
         po_items.append(item)
 
-    # Sort by date descending and apply limit (matches ABAP: ORDER BY h~bedat DESCENDING UP TO iv_max_pos ROWS)
+    # Sort by date descending and limit — matches PeopleCode: ORDER BY PH.PO_DT DESC + maxPOItems
     po_items.sort(key=lambda x: x.po_date, reverse=True)
     po_items = po_items[: request.max_po_items]
 
-    # Calculate aggregates
     total_value, open_count = calculate_po_aggregates(po_items)
     vendor.total_po_value = total_value
     vendor.open_po_count = open_count
@@ -146,7 +144,7 @@ def lookup_vendor(
         po_history=po_items,
         return_code=0,
         return_message=(
-            f"Vendor {request.vendor_number} retrieved successfully. "
+            f"Vendor {request.vendor_id} retrieved successfully. "
             f"{len(po_items)} PO items returned."
         ),
     )

@@ -1,0 +1,201 @@
+/*----------------------------------------------------------------------*/
+/* Component Interface: CI_VENDOR_LOOKUP                                */
+/*----------------------------------------------------------------------*/
+/* PeopleCode Component Interface for vendor/supplier master lookup.    */
+/* Queries PS_VENDOR, PS_VENDOR_ADDR, PS_VNDR_BANK_ACCT tables.        */
+/* Exposes vendor detail and recent purchase order summary.             */
+/* Called by third-party procurement portal and middleware layer.        */
+/*                                                                       */
+/* Created: 2010-11-05  Author: GBLSCM-DEV                             */
+/* Changed: 2021-03-17  Last bundle: SCM_VNDR_1203                      */
+/*----------------------------------------------------------------------*/
+
+/* FieldFormula — CI_VENDOR_LOOKUP.OnExecute */
+
+Local ApiObject &CI;
+Local Rowset &rsVendor, &rsAddr, &rsBank, &rsPO;
+Local Record &recVendor, &recAddr, &recBank, &recPO;
+Local string &vendorId, &setId, &businessUnit;
+Local number &maxPOItems, &i;
+Local date &dateFrom;
+Local number &returnCode;
+Local string &returnMsg;
+
+/* Get input parameters from Component Interface properties */
+&CI = %CompIntfcName;
+&vendorId = &CI.VENDOR_ID;
+&setId = &CI.SETID;
+&businessUnit = &CI.BUSINESS_UNIT;
+&maxPOItems = &CI.MAX_PO_ITEMS;
+&dateFrom = &CI.DATE_FROM;
+
+If None(&setId) Then
+   &setId = "SHARE";
+End-If;
+
+If &maxPOItems = 0 Then
+   &maxPOItems = 50;
+End-If;
+
+If None(&dateFrom) Then
+   &dateFrom = AddToDate(%Date, - 1, 0, 0);  /* Default: 12 months ago */
+End-If;
+
+/*----------------------------------------------------------------------*/
+/* Authorization Check                                                  */
+/*----------------------------------------------------------------------*/
+
+If Not IsUserInRole("VENDOR_INQUIRY") And Not IsUserInRole("VENDOR_ADMIN") Then
+   &returnCode = 2;
+   &returnMsg = "Authorization failed: User " | %OperatorId | " does not have VENDOR_INQUIRY or VENDOR_ADMIN role";
+   &CI.RETURN_CODE = &returnCode;
+   &CI.RETURN_MSG = &returnMsg;
+   Error (&returnMsg);
+End-If;
+
+/*----------------------------------------------------------------------*/
+/* Fetch Vendor Master Data                                             */
+/*----------------------------------------------------------------------*/
+
+&rsVendor = CreateRowset(Record.VENDOR);
+&rsVendor.Fill("WHERE SETID = :1 AND VENDOR_ID = :2", &setId, &vendorId);
+
+If &rsVendor.ActiveRowCount = 0 Then
+   &returnCode = 1;
+   &returnMsg = "Vendor " | &vendorId | " not found in SetID " | &setId;
+   &CI.RETURN_CODE = &returnCode;
+   &CI.RETURN_MSG = &returnMsg;
+   Error (&returnMsg);
+End-If;
+
+&recVendor = &rsVendor(1).GetRecord(Record.VENDOR);
+
+/* Populate CI output fields from vendor record */
+&CI.VENDOR_NAME1 = &recVendor.NAME1.Value;
+&CI.VENDOR_NAME2 = &recVendor.NAME2.Value;
+&CI.VENDOR_STATUS = &recVendor.VENDOR_STATUS.Value;
+&CI.VNDR_CLASS = &recVendor.VNDR_CLASS.Value;
+&CI.WITHHOLD_ENTITY = &recVendor.WITHHOLD_ENTITY.Value;
+&CI.TAX_ENTITY_ID = &recVendor.TAX_ENTITY_ID.Value;
+
+/*----------------------------------------------------------------------*/
+/* Fetch Vendor Address                                                 */
+/*----------------------------------------------------------------------*/
+
+Local string &addrSql;
+&addrSql = "SELECT ADDRESS1, ADDRESS2, CITY, STATE, POSTAL, COUNTRY, " |
+           "PHONE, FAX, EMAILID " |
+           "FROM PS_VENDOR_ADDR " |
+           "WHERE SETID = :1 AND VENDOR_ID = :2 AND EFFDT = " |
+           "(SELECT MAX(VA2.EFFDT) FROM PS_VENDOR_ADDR VA2 " |
+           " WHERE VA2.SETID = :3 AND VA2.VENDOR_ID = :4 " |
+           " AND VA2.EFFDT <= %DateIn(:5))";
+
+Local string &address1, &address2, &city, &state, &postal, &country;
+Local string &phone, &fax, &email;
+
+SQLExec(&addrSql, &setId, &vendorId, &setId, &vendorId, %Date,
+        &address1, &address2, &city, &state, &postal, &country,
+        &phone, &fax, &email);
+
+&CI.ADDRESS1 = &address1;
+&CI.ADDRESS2 = &address2;
+&CI.CITY = &city;
+&CI.STATE = &state;
+&CI.POSTAL = &postal;
+&CI.COUNTRY = &country;
+&CI.PHONE = &phone;
+&CI.FAX = &fax;
+&CI.EMAILID = &email;
+
+/*----------------------------------------------------------------------*/
+/* Fetch Bank Account Info (primary account only)                       */
+/*----------------------------------------------------------------------*/
+
+Local string &bankSql;
+&bankSql = "SELECT BANK_CD, BANK_ACCT_TYPE, BENEFICIARY_NAME, " |
+           "BRANCH_ID, DFI_ID_NUM, BANK_ACCT_KEY " |
+           "FROM PS_VNDR_BANK_ACCT " |
+           "WHERE SETID = :1 AND VENDOR_ID = :2 " |
+           "AND PRIMARY_ACCT = 'Y' AND EFFDT = " |
+           "(SELECT MAX(VB2.EFFDT) FROM PS_VNDR_BANK_ACCT VB2 " |
+           " WHERE VB2.SETID = :3 AND VB2.VENDOR_ID = :4 " |
+           " AND VB2.EFFDT <= %DateIn(:5))";
+
+Local string &bankCd, &bankAcctType, &beneficiary, &branchId, &dfiIdNum, &bankAcctKey;
+
+SQLExec(&bankSql, &setId, &vendorId, &setId, &vendorId, %Date,
+        &bankCd, &bankAcctType, &beneficiary, &branchId, &dfiIdNum, &bankAcctKey);
+
+&CI.BANK_CD = &bankCd;
+&CI.BANK_ACCT_TYPE = &bankAcctType;
+&CI.BENEFICIARY_NAME = &beneficiary;
+&CI.BRANCH_ID = &branchId;
+&CI.DFI_ID_NUM = &dfiIdNum;
+
+/*----------------------------------------------------------------------*/
+/* Fetch Purchase Order History                                         */
+/*----------------------------------------------------------------------*/
+
+Local string &poSql;
+&poSql = "SELECT PH.PO_ID, PL.LINE_NBR, PH.PO_DT, " |
+         "PL.INV_ITEM_ID, PL.DESCR254, PL.QTY_PO, PL.UNIT_OF_MEASURE, " |
+         "PL.PRICE_PO, PH.CURRENCY_CD, PL.RECV_STATUS, PL.CANCEL_STATUS, " |
+         "PL.REQ_ID " |
+         "FROM PS_PO_HDR PH " |
+         "INNER JOIN PS_PO_LINE PL ON PL.BUSINESS_UNIT = PH.BUSINESS_UNIT " |
+         "  AND PL.PO_ID = PH.PO_ID " |
+         "WHERE PH.BUSINESS_UNIT = :1 AND PH.VENDOR_ID = :2 " |
+         "AND PH.PO_DT >= %DateIn(:3) " |
+         "AND PH.PO_STATUS NOT IN ('X', 'D') " |
+         "ORDER BY PH.PO_DT DESC";
+
+&rsPO = CreateRowset(Record.DERIVED_PO);
+SQLExec(&poSql, &businessUnit, &vendorId, &dateFrom, &rsPO);
+
+/* Limit to max PO items and calculate aggregates */
+Local number &totalPOValue, &openPOCount;
+Local number &poCount;
+&totalPOValue = 0;
+&openPOCount = 0;
+&poCount = 0;
+
+For &i = 1 To &rsPO.ActiveRowCount
+   If &poCount >= &maxPOItems Then
+      Break;
+   End-If;
+
+   &recPO = &rsPO(&i).GetRecord(Record.DERIVED_PO);
+   &poCount = &poCount + 1;
+
+   /* Aggregate: total PO value = price * quantity */
+   &totalPOValue = &totalPOValue + (&recPO.PRICE_PO.Value * &recPO.QTY_PO.Value);
+
+   /* Count open POs (not fully received and not cancelled) */
+   If &recPO.RECV_STATUS.Value <> "F" And &recPO.CANCEL_STATUS.Value <> "X" Then
+      &openPOCount = &openPOCount + 1;
+   End-If;
+
+   /* Copy to CI output collection */
+   &CI.PO_HISTORY(&poCount).PO_ID = &recPO.PO_ID.Value;
+   &CI.PO_HISTORY(&poCount).LINE_NBR = &recPO.LINE_NBR.Value;
+   &CI.PO_HISTORY(&poCount).PO_DT = &recPO.PO_DT.Value;
+   &CI.PO_HISTORY(&poCount).INV_ITEM_ID = &recPO.INV_ITEM_ID.Value;
+   &CI.PO_HISTORY(&poCount).DESCR254 = &recPO.DESCR254.Value;
+   &CI.PO_HISTORY(&poCount).QTY_PO = &recPO.QTY_PO.Value;
+   &CI.PO_HISTORY(&poCount).UNIT_OF_MEASURE = &recPO.UNIT_OF_MEASURE.Value;
+   &CI.PO_HISTORY(&poCount).PRICE_PO = &recPO.PRICE_PO.Value;
+   &CI.PO_HISTORY(&poCount).CURRENCY_CD = &recPO.CURRENCY_CD.Value;
+   &CI.PO_HISTORY(&poCount).RECV_STATUS = &recPO.RECV_STATUS.Value;
+   &CI.PO_HISTORY(&poCount).CANCEL_STATUS = &recPO.CANCEL_STATUS.Value;
+   &CI.PO_HISTORY(&poCount).REQ_ID = &recPO.REQ_ID.Value;
+End-For;
+
+/*----------------------------------------------------------------------*/
+/* Return Results                                                       */
+/*----------------------------------------------------------------------*/
+
+&CI.TOTAL_PO_VALUE = &totalPOValue;
+&CI.OPEN_PO_COUNT = &openPOCount;
+&CI.RETURN_CODE = 0;
+&CI.RETURN_MSG = "Vendor " | &vendorId | " retrieved successfully. " | String(&poCount) | " PO items returned.";

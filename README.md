@@ -1,164 +1,195 @@
-# SAP Legacy Migration Demo
+# PeopleSoft → Python Migration Demo
 
-> **Devin AI** migrating custom ABAP objects to modern Python services.
-> All company names, data, and identifiers in this demo are fictional.
-
----
-
-## What This Demo Shows
-
-A mid-size retailer ("Acme Retail Corp") has **hundreds of custom SAP objects** accumulated over 15+ years. This demo walks through three representative migrations — the same patterns Devin executes at scale across an entire custom object inventory.
-
-Each example includes:
-1. The **original ABAP source code** (realistic, production-style)
-2. The **migrated Python service** (FastAPI-ready, fully typed)
-3. **Unit tests** proving functional equivalence
-4. **Inline migration comments** mapping Python back to ABAP for traceability
+> **Demo repository** showing how Devin migrates legacy PeopleSoft PeopleCode to modern Python services targeting Workday.
+> Three representative objects demonstrate the migration pattern at production quality.
 
 ---
 
 ## Demo Structure
 
 ```
-sap-migration-demo/
-├── README.md                           ← You are here
-├── migration-playbook.md               ← Reusable migration playbook template
-├── requirements.txt                    ← Python dependencies
-│
-├── abap_source/                        ← Original ABAP programs
-│   ├── z_inventory_report.abap         ← Custom ALV inventory report
-│   ├── z_rfc_vendor_lookup.abap        ← RFC function module
-│   └── z_idoc_order_sync.abap          ← IDoc processing function
-│
-├── python_target/                      ← Migrated Python services
-│   ├── inventory_report/
-│   │   ├── models.py                   ← Pydantic models (from ABAP TYPEs)
-│   │   └── service.py                  ← Business logic (from ABAP FORMs)
+peoplesoft-migration-demo/
+├── README.md                              ← This file
+├── migration-playbook.md                  ← PeopleCode → Python/Workday playbook
+├── requirements.txt
+├── peoplecode_source/                     ← Original PeopleCode programs
+│   ├── employee_status_report.ppl         ← Application Engine (batch HR report)
+│   ├── ci_vendor_lookup.ppl               ← Component Interface (vendor lookup)
+│   └── integration_broker_sync.ppl        ← Integration Broker (employee sync)
+├── python_target/                         ← Migrated Python services
+│   ├── employee_status_report/
+│   │   ├── models.py                      ← Pydantic models (from Rowsets/Records)
+│   │   └── service.py                     ← Business logic
 │   ├── vendor_lookup/
 │   │   ├── models.py
 │   │   └── service.py
-│   └── order_sync/
+│   └── employee_sync/
 │       ├── models.py
 │       └── service.py
-│
-└── tests/                              ← Functional equivalence tests
-    ├── test_inventory_report.py
+└── tests/
+    ├── test_employee_status_report.py
     ├── test_vendor_lookup.py
-    └── test_order_sync.py
+    └── test_employee_sync.py
 ```
 
 ---
 
-## The Three Migrations
+## Three Migrations
 
-### 1. Inventory Report — ALV Report → FastAPI + JSON
+### 1. Employee Status Report
 
-| | ABAP (Before) | Python (After) |
-|---|---|---|
-| **Source** | `Z_INVENTORY_REPORT` | `inventory_report/service.py` |
-| **Pattern** | Selection screen → SELECT → calculate → ALV grid | Query params → SQL → compute → JSON response |
-| **Tables** | MARA, MAKT, MARC, MARD, MSEG, MKPF | Data warehouse equivalent |
-| **Key logic** | Traffic-light stock status (red/yellow/green) based on reorder point thresholds and stale receipt detection | Identical thresholds, same status enum |
-| **Lines** | ~210 ABAP | ~160 Python |
+| Attribute        | Source (PeopleSoft)                                | Target (Python)                    |
+|------------------|----------------------------------------------------|------------------------------------|
+| **Object**       | Application Engine `HR_EMP_STATUS`                 | FastAPI endpoint + JSON response   |
+| **Tables**       | PS_JOB, PS_PERSONAL_DATA, PS_EMPLOYMENT            | Data warehouse query               |
+| **Pattern**      | CreateRowset → Fill → Evaluate → GetFile/WriteLine | Query → transform → JSON response  |
+| **Business logic** | Status categorization (Active/LOA/Terminated/Retired), headcount flag, stale action detection | Same logic, same thresholds |
 
-**What Devin did**: Translated the selection screen to `InventoryFilters` (Pydantic model), replicated the traffic-light calculation with identical thresholds (stock ≤ 0 → red, stock < reorder → red, stock < 1.5× reorder → yellow, else green), and replaced ALV grid output with a structured JSON response that includes an aggregated summary the original report didn't have.
+**Key PeopleCode patterns migrated**:
+- `CreateRowset(Record.JOB)` / `Fill("WHERE ...")` → list comprehension over query results
+- `Evaluate &emplStatus When = "A" ...` → dictionary-based status mapping
+- Run Control record parameters → API query parameters
+- CSV file output via `GetFile()` / `WriteLine()` → JSON response body
 
-### 2. Vendor Lookup — RFC Function Module → REST API
+### 2. Vendor/Supplier Lookup
 
-| | ABAP (Before) | Python (After) |
-|---|---|---|
-| **Source** | `Z_RFC_VENDOR_LOOKUP` | `vendor_lookup/service.py` |
-| **Pattern** | RFC import/export → SELECT → aggregate → return | Request/response → query → compute → JSON |
-| **Tables** | LFA1, LFB1, ADR6, EKKO, EKPO | Data warehouse equivalent |
-| **Key logic** | Vendor master + PO history with date filtering, quantity limiting, and value aggregation | Same logic, same sort order |
-| **Lines** | ~175 ABAP | ~120 Python |
+| Attribute        | Source (PeopleSoft)                                | Target (Python)                    |
+|------------------|----------------------------------------------------|------------------------------------|
+| **Object**       | Component Interface `CI_VENDOR_LOOKUP`             | REST API endpoint                  |
+| **Tables**       | PS_VENDOR, PS_VENDOR_ADDR, PS_VNDR_BANK_ACCT, PS_PO_HDR, PS_PO_LINE | Data warehouse query |
+| **Pattern**      | CI.Get() → SQLExec → aggregate → CI output         | Request → query → aggregate → JSON |
+| **Business logic** | Vendor master lookup, PO history with date filtering, open PO counting | Same logic, same aggregation |
 
-**What Devin did**: Mapped the RFC IMPORTING/EXPORTING interface to a request/response model pair, converted AUTHORITY-CHECK to a typed exception (auth middleware in production), preserved the PO date filtering and `UP TO n ROWS` limit as Python sort + slice, and kept the same aggregate calculation (total PO value, open PO count).
+**Key PeopleCode patterns migrated**:
+- `%CompIntfcName` / `&CI.VENDOR_ID` → request body fields
+- `IsUserInRole("VENDOR_INQUIRY")` → API key / JWT middleware
+- `SQLExec()` with effective-dated joins → SQL query with date parameters
+- `Error()` for vendor-not-found → Python `VendorNotFoundError` exception
+- CI output collection `&CI.PO_HISTORY(&poCount)` → list of `PurchaseOrderItem` models
 
-### 3. Order Sync — IDoc Processing → Event-Driven Service
+### 3. Employee Sync
 
-| | ABAP (Before) | Python (After) |
-|---|---|---|
-| **Source** | `Z_IDOC_ORDER_SYNC` | `order_sync/service.py` |
-| **Pattern** | IDoc segments → parse → validate → BAPI call → status | JSON message → deserialize → validate → API call → result |
-| **Tables** | EDIDC, EDIDD, VBAK/VBAP (via BAPI) | Message queue + target system API |
-| **Key logic** | Segment-by-segment IDoc parsing (E1EDK01, E1EDK03, E1EDKA1, E1EDP01, E1EDP19), BAPI mapping, commit/rollback | Same parsing logic via structured deserialization, same validation rules |
-| **Lines** | ~310 ABAP | ~210 Python |
+| Attribute        | Source (PeopleSoft)                                | Target (Python)                    |
+|------------------|----------------------------------------------------|------------------------------------|
+| **Object**       | Integration Broker handler `EMP_SYNC_SUB`          | Event-driven message consumer      |
+| **Tables**       | Inbound XML message                                | JSON message from queue            |
+| **Pattern**      | %IntBroker.GetMessage() → parse XML → validate → map → publish response | Consume JSON → validate → transform → call target |
+| **Business logic** | HIRE/REHIRE/TRANSFER/TERMINATION validation and mapping to Workday API | Same validation rules, same field mapping |
 
-**What Devin did**: Replaced IDoc segment parsing (`CASE lv_segment / WHEN 'E1EDK01'`) with structured JSON deserialization into Pydantic models, translated BAPI_SALESORDER_CREATEFROMDAT2 parameter mapping to a target system API call, preserved the same validation rules (missing sold-to → error, no items → error), and mapped IDoc status records (51=error, 53=success) to `OrderSyncResult` objects.
+**Key PeopleCode patterns migrated**:
+- `%IntBroker.GetMessage()` / `&MSG.GetXmlDoc()` → JSON deserialization via Pydantic
+- `XmlNode.FindNode("EmployeeData")` → model field access
+- `Evaluate &transactionType When = "HIRE" ...` → `TransactionType` enum dispatch
+- `CommitWork()` / `RollbackWork()` → transaction management in service layer
+- `%IntBroker.Publish(&responseMsg)` → `SyncResult` return value
 
 ---
 
-## Running the Tests
+## Running the Demo
 
 ```bash
-cd sap-migration-demo
+# Install dependencies
 pip install -r requirements.txt
+
+# Run all tests
 pytest tests/ -v
+
+# Run a specific migration's tests
+pytest tests/test_employee_status_report.py -v
+pytest tests/test_vendor_lookup.py -v
+pytest tests/test_employee_sync.py -v
 ```
-
-Expected output: **25+ tests passing**, covering:
-- Stock status calculation (all threshold boundaries)
-- Stock percentage computation
-- Status filtering (critical/warning/healthy checkboxes)
-- Full report generation end-to-end
-- Vendor lookup with PO aggregation
-- PO date filtering and result limiting
-- Vendor-not-found error handling
-- IDoc segment parsing (all 5 segment types)
-- Order validation (6 validation rules)
-- Single order processing (success + failure)
-- Batch processing with mixed results
-
----
-
-## The Migration Playbook
-
-See [`migration-playbook.md`](migration-playbook.md) for the reusable playbook that drives these migrations. It includes:
-
-- **Pre-migration checklist** — what to gather before starting
-- **Step-by-step migration process** — analyze → design → model → implement → test → validate
-- **Pattern templates** — ALV Report, RFC Function, IDoc Processing
-- **ABAP → Python translation reference** — common constructs mapped
-- **Quality checklist** — definition of "done" for each migrated object
-
-This playbook is what Devin executes at scale. Define it once, run it across hundreds of objects in parallel.
-
----
-
-## Key Takeaways for Prospects
-
-### What Devin handles (the 80%)
-- Translating ABAP business logic to Python, Java, TypeScript, or C#
-- Creating typed data models from ABAP structure definitions
-- Writing functional equivalence tests for every migrated object
-- Mapping SAP interfaces (RFC, IDoc, BAPI) to modern equivalents (REST, events)
-- Executing the same pattern across hundreds of objects in parallel
-
-### What consultants handle (the 20%)
-- Defining the target architecture
-- Creating migration patterns/playbooks
-- Migrating SAP configuration (IMG, pricing, workflows)
-- Reviewing complex business logic that requires domain expertise
-- Integration testing against SAP sandbox environments
-
-### The economics
-- SAP consultants: $200–300/hour for repetitive translation work
-- Devin: parallelizes that translation across the full object inventory
-- Typical efficiency gain: **6–12× over manual engineering**
 
 ---
 
 ## Presenter Notes
 
-**Opening** (2 min): "Your SAP system has hundreds of custom objects — Z-programs, RFCs, IDocs. Each one needs to be migrated. That's a huge amount of repetitive translation work. Here's how Devin handles it."
+### Setup (before the meeting)
 
-**Walkthrough** (5 min): Open the three ABAP files side-by-side with their Python equivalents. Point out:
-- The ABAP type definitions → Pydantic models (type safety preserved)
-- The business logic → Python functions (same thresholds, same flow)
-- The inline comments → traceability back to original code
-- The tests → proving functional equivalence
+1. Have this repo open in VS Code or similar
+2. Open `peoplecode_source/employee_status_report.ppl` side-by-side with `python_target/employee_status_report/service.py`
+3. Run `pytest tests/ -v` to confirm all tests pass
+4. Have `migration-playbook.md` open in a preview pane
 
-**Scale story** (2 min): "These three objects took Devin about 15 minutes each. Your SAP system might have 500 of these. Devin runs them in parallel. Instead of a team of 10 consultants working for 6 months, you get the bulk translation done in weeks."
+### Suggested Demo Flow (15 minutes)
 
-**Honest limitations** (1 min): "Devin doesn't replace your SAP consultants — it handles the translation labor so they can focus on the 20% that actually needs domain expertise: architecture decisions, configuration migration, and complex business process design."
+1. **Open the PeopleCode source** (2 min)
+   - Show `employee_status_report.ppl` — point out the realistic Application Engine structure
+   - Highlight the legacy date (Created: 2012-04-18), complex SQL joins, Evaluate block
+   - "This is a real-world pattern — 10+ year old PeopleCode, thousands of lines querying HR tables"
+
+2. **Show the migrated Python** (3 min)
+   - Switch to `python_target/employee_status_report/service.py`
+   - Show the inline comments mapping back to PeopleCode steps
+   - Show the Pydantic model fields with `Field(description="PS_JOB.EMPLID")` annotations
+   - "Every function traces back to the original PeopleCode. Nothing is lost in translation."
+
+3. **Walk through the translation table** (3 min)
+   - Open `migration-playbook.md`
+   - Show the PeopleCode → Python mapping table (Rowset → list[Model], etc.)
+   - Show the three migration patterns (Application Engine, Component Interface, Integration Broker)
+   - "This playbook is what Devin follows for every object. It's deterministic and repeatable."
+
+4. **Run the tests** (2 min)
+   - `pytest tests/ -v`
+   - Point out test docstrings referencing original PeopleCode logic
+   - "Each test validates functional equivalence — same input, same output as PeopleCode"
+
+5. **Show the Component Interface migration** (2 min)
+   - Side-by-side: `ci_vendor_lookup.ppl` → `vendor_lookup/service.py`
+   - Highlight: CI properties → request/response models, Error() → exceptions
+   - "PeopleSoft Component Interfaces become REST APIs — same data, modern access pattern"
+
+6. **Show the Integration Broker migration** (2 min)
+   - Side-by-side: `integration_broker_sync.ppl` → `employee_sync/service.py`
+   - Highlight: XML parsing → JSON/Pydantic, Evaluate → enum dispatch
+   - "Integration Broker XML messages become JSON events — the validation logic is identical"
+
+7. **Close with the value proposition** (1 min)
+   - "Three different PeopleSoft patterns, all migrated with full traceability"
+   - "This is what Devin does at scale — hundreds of objects, same quality, same approach"
+
+### Talking Points for Q&A
+
+- **"How does Devin handle PeopleCode it hasn't seen before?"**
+  The migration playbook defines patterns. Each PeopleCode construct maps to a Python equivalent.
+  Devin reads the source, identifies the pattern, and applies the corresponding transformation.
+
+- **"What about PeopleSoft-specific SQL (effective dating, SetID logic)?"**
+  These are well-documented PeopleSoft patterns. The playbook explicitly covers effective-dated joins
+  and SetID resolution. Devin preserves the same query logic in the Python implementation.
+
+- **"How do you ensure nothing is lost?"**
+  Every Python function has inline comments mapping to PeopleCode source.
+  Every Pydantic field references the PeopleSoft record.field name.
+  Every test cites the original PeopleCode logic it validates.
+
+- **"Can this work with our existing PeopleSoft system?"**
+  Yes. The pattern works with any PeopleCode export. We read the source,
+  apply the playbook, generate Python with full traceability, and validate with tests.
+
+---
+
+## Key Takeaways
+
+1. **PeopleSoft → Python migration is a pattern-matching problem.** PeopleCode constructs (Rowsets, Component Interfaces, Integration Broker handlers) have direct Python equivalents. Devin applies these mappings systematically.
+
+2. **Functional equivalence is the standard.** We don't optimize during migration — every line of Python matches the original PeopleCode behavior. Optimization comes later, after equivalence is proven.
+
+3. **Traceability is built in, not bolted on.** Every Python function, every model field, every test references the original PeopleCode source. This is critical for audit compliance and consulting partner review.
+
+4. **The 80/20 consulting partner pattern works here.** Infosys PeopleSoft consultants define the migration scope, validate business rules, and handle PeopleSoft configuration. Devin handles the repetitive code translation — the 80% that is mechanical. Infosys focuses on the 20% that requires deep PeopleSoft domain knowledge (effective dating nuances, security configuration, workflow rules).
+
+5. **This scales.** The three examples here cover the most common PeopleSoft customization patterns (Application Engine, Component Interface, Integration Broker). A typical PeopleSoft implementation has hundreds of custom objects following these same patterns. Devin migrates them with the same quality and traceability shown here.
+
+---
+
+## Technical Stack
+
+| Component         | Technology                    |
+|-------------------|-------------------------------|
+| Data models       | Pydantic v2                   |
+| Testing           | pytest                        |
+| Type checking     | Standard Python type hints    |
+| Target platform   | Workday (via REST/SOAP APIs)  |
+| Source platform    | PeopleSoft HCM / FSCM 9.2    |
