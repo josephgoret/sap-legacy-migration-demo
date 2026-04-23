@@ -1,39 +1,40 @@
-# SAP ABAP → Python Migration Playbook
+# PeopleCode → Python Migration Playbook
 
-> **Purpose**: Reusable playbook for Devin to migrate custom ABAP objects to Python services.
+> **Purpose**: Reusable playbook for Devin to migrate PeopleSoft PeopleCode objects to Python services targeting Workday.
 > Designed for batch execution across hundreds of custom objects.
 
 ---
 
 ## Scope
 
-This playbook covers migration of **code-based** SAP customizations:
+This playbook covers migration of **code-based** PeopleSoft customizations:
 
-| Source (SAP)              | Target (Python)                     | Pattern     |
-|---------------------------|-------------------------------------|-------------|
-| Custom ALV reports (Z*)   | FastAPI endpoint + pandas           | Report      |
-| RFC function modules      | REST API endpoint                   | Interface   |
-| IDoc processing functions | Event-driven service (queue-based)  | Interface   |
-| Custom BAdI implementations | Service layer module              | Enhancement |
-| SAPscript / Smart Forms   | PDF generation (WeasyPrint/ReportLab) | Report    |
+| Source (PeopleSoft)                  | Target (Python)                         | Pattern     |
+|--------------------------------------|-----------------------------------------|-------------|
+| Application Engine programs          | FastAPI endpoint + JSON                 | Report      |
+| Component Interfaces                 | REST API endpoint                       | Interface   |
+| Integration Broker handlers          | Event-driven service (queue-based)      | Interface   |
+| Component PeopleCode (record/page)   | Service layer module                    | Enhancement |
+| SQR reports                          | PDF generation (WeasyPrint/ReportLab)   | Report      |
 
-**Out of scope** (requires SAP functional consultants):
-- IMG configuration / customizing
-- Pricing procedures
-- Output determination
-- Workflow rules
-- Authorization role design
+**Out of scope** (requires PeopleSoft functional consultants):
+- PeopleSoft configuration (SetID, TableSets, Tree Manager)
+- Approval workflow engine rules
+- Security permission lists and roles
+- Process Scheduler job definitions
+- nVision report layouts
+- Fluid / Classic page redesign
 
 ---
 
 ## Pre-Migration Checklist
 
-Before starting migration of any ABAP object:
+Before starting migration of any PeopleCode object:
 
-- [ ] Source ABAP code is exported and accessible
+- [ ] Source PeopleCode is exported and accessible
 - [ ] Business owner has confirmed the object is still in use
 - [ ] Target architecture is defined (API framework, database, deployment)
-- [ ] Data dictionary dependencies are mapped (which SAP tables are read/written)
+- [ ] Record/table dependencies are mapped (which PS_ tables are read/written)
 - [ ] Test data is available (sample inputs and expected outputs)
 - [ ] Acceptance criteria defined (functional equivalence tests)
 
@@ -41,70 +42,78 @@ Before starting migration of any ABAP object:
 
 ## Migration Steps
 
-### Step 1: Analyze the ABAP Source
+### Step 1: Analyze the PeopleCode Source
 
-Read the ABAP program and identify:
+Read the PeopleCode program and identify:
 
-1. **Input parameters**: Selection screen fields, function module imports, IDoc segments
-2. **Data sources**: SAP tables accessed (MARA, EKKO, VBAK, etc.) and their joins
-3. **Business logic**: Calculations, validations, status determinations, conditional flows
-4. **Output format**: ALV grid, RFC exports, IDoc status, file output
-5. **Dependencies**: Called function modules, BAPIs, includes, macros
-6. **Error handling**: SY-SUBRC checks, exception handling, message types
+1. **Input parameters**: Run control fields, Component Interface properties, IB message fields
+2. **Data sources**: PeopleSoft tables accessed (PS_JOB, PS_VENDOR, PS_PO_HDR, etc.) and their joins
+3. **Business logic**: Calculations, Evaluate blocks, validations, conditional flows
+4. **Output format**: CSV file, CI output properties, IB response XML, rowset data
+5. **Dependencies**: Called Application Packages, SQL objects, Component Interfaces
+6. **Error handling**: If/Else checks, Error() calls, MessageBox(), try/catch blocks
 
 Document these in a structured format before writing any Python code.
 
 ### Step 2: Design the Python Target
 
-Map each ABAP component to its Python equivalent:
+Map each PeopleCode component to its Python equivalent:
 
-| ABAP Concept            | Python Equivalent                    |
-|-------------------------|--------------------------------------|
-| Selection screen        | API query parameters / request body  |
-| TYPE definition         | Pydantic BaseModel                   |
-| INTERNAL TABLE          | `list[Model]`                        |
-| FIELD-SYMBOL            | Loop variable / list comprehension   |
-| SELECT ... INTO TABLE   | SQL query → DataFrame or ORM query   |
-| AUTHORITY-CHECK         | JWT / API key middleware              |
-| SY-SUBRC check          | Exception handling / if-else         |
-| MESSAGE TYPE 'E'        | HTTPException / raise                |
-| ALV display             | JSON response                        |
-| RFC interface           | REST/GraphQL endpoint                |
-| IDoc processing         | Message queue consumer               |
-| BAPI call               | Target system API call               |
-| COMMIT WORK             | Database transaction commit          |
-| ROLLBACK WORK           | Database transaction rollback        |
+| PeopleCode Concept                   | Python Equivalent                        |
+|--------------------------------------|------------------------------------------|
+| Rowset / CreateRowset()              | `list[Model]`                            |
+| Record / GetRecord()                 | Pydantic `BaseModel`                     |
+| SQLExec / CreateSQL                  | SQL query → ORM / raw SQL                |
+| Fill("WHERE ...")                    | Filtered query / list comprehension      |
+| Evaluate / When                      | `if/elif` or `match/case`               |
+| &field.Value                         | Model attribute access                   |
+| Component Interface                  | REST API endpoint                        |
+| Integration Broker message           | JSON message from queue                  |
+| %IntBroker.GetMessage()              | Message consumer / webhook               |
+| &MSG.GetXmlDoc()                     | JSON deserialization (Pydantic)          |
+| XmlNode.FindNode()                   | Dict/model field access                  |
+| Run Control record                   | API query parameters / request body      |
+| IsUserInRole()                       | JWT / API key middleware                 |
+| Error() / MessageBox()               | HTTPException / raise                    |
+| CommitWork()                         | Database transaction commit              |
+| RollbackWork()                       | Database transaction rollback            |
+| Application Engine step              | Python function                          |
+| GetFile() / WriteLine()             | JSON response / file export              |
+| %Date / %DateTime                    | `date.today()` / `datetime.now()`       |
+| DatePart() / AddToDate()            | `date.year` / `timedelta`              |
+| All() / None() checks               | Truthiness / `is None`                  |
 
 ### Step 3: Create Data Models
 
-For each ABAP TYPE definition or structure:
+For each PeopleCode Record or structure:
 
 ```python
 from pydantic import BaseModel, Field
 
-class MaterialStock(BaseModel):
-    """Maps to ABAP ty_inventory structure.
-    
-    Source fields: MARA-MATNR, MAKT-MAKTX, MARD-LABST, etc.
+class EmployeeRecord(BaseModel):
+    """Maps to PeopleCode PS_JOB + PS_PERSONAL_DATA join.
+
+    Source fields: PS_JOB.EMPLID, PS_PERSONAL_DATA.NAME_DISPLAY, etc.
     """
-    material_number: str = Field(description="MATNR")
-    description: str = Field(description="MAKTX")
-    available_stock: Decimal = Field(description="LABST")
+    employee_id: str = Field(description="PS_JOB.EMPLID")
+    name: str = Field(description="PS_PERSONAL_DATA.NAME_DISPLAY")
+    annual_rate: Decimal = Field(description="PS_JOB.ANNUAL_RT")
 ```
 
 **Rules**:
-- One model per ABAP structure/table type
-- Include Field descriptions mapping to SAP field names
-- Use Python-native types (Decimal for quantities/amounts, date for DATS)
-- Add docstrings referencing the source ABAP type name
+- One model per PeopleCode Record or logical data structure
+- Include Field descriptions mapping to PeopleSoft record.field names
+- Use Python-native types (Decimal for amounts, date for date fields)
+- Add docstrings referencing the source PeopleCode record/table name
 
 ### Step 4: Implement Business Logic
 
-Translate ABAP FORMs/methods to Python functions:
+Translate PeopleCode logic to Python functions:
 
-- Each ABAP `FORM` or method → one Python function
+- Each Application Engine step → one Python function
+- Each major Evaluate block → one function with clear mapping
 - Preserve the same function name (converted to snake_case)
-- Add comments mapping to ABAP logic for traceability
+- Add comments mapping to PeopleCode logic for traceability
 - Keep the same control flow structure where possible
 
 **Critical**: Do NOT "improve" the business logic during migration.
@@ -115,172 +124,205 @@ Optimizations come in a separate phase after migration is validated.
 
 For each migrated function, write tests that verify:
 
-1. **Happy path**: Same input → same output as ABAP
-2. **Edge cases**: Empty tables, zero values, null/initial fields
-3. **Boundary conditions**: Threshold values (e.g., stock = reorder point exactly)
-4. **Error cases**: Invalid input → same error behavior as ABAP
+1. **Happy path**: Same input → same output as PeopleCode
+2. **Edge cases**: Empty rowsets, zero values, None/blank fields
+3. **Boundary conditions**: Threshold values (e.g., stale days exactly)
+4. **Error cases**: Invalid input → same error behavior as PeopleCode
 
 Test naming convention:
 ```python
 def test_<function_name>_<scenario>():
-    """ABAP: <reference to original logic>."""
+    """PeopleCode: <reference to original logic>."""
 ```
 
 ### Step 6: Validate and Review
 
 - [ ] All tests pass
-- [ ] Every ABAP FORM/method has a corresponding Python function
-- [ ] Every ABAP TYPE has a corresponding Pydantic model
+- [ ] Every PeopleCode step/method has a corresponding Python function
+- [ ] Every PeopleCode Record has a corresponding Pydantic model
 - [ ] Business logic matches 1:1 (no accidental "improvements")
-- [ ] Error handling covers all ABAP SY-SUBRC / MESSAGE paths
-- [ ] Comments reference original ABAP code for traceability
+- [ ] Error handling covers all PeopleCode Error()/MessageBox() paths
+- [ ] Comments reference original PeopleCode for traceability
 
 ---
 
 ## Migration Patterns by Object Type
 
-### Pattern A: ALV Report → FastAPI + JSON
+### Pattern A: Application Engine → FastAPI + JSON
 
 ```
-ABAP Flow:                      Python Flow:
-─────────────                   ────────────
-Selection Screen  ─────────►    Query Parameters / Request Body
-    │                               │
-    ▼                               ▼
-SELECT from DB    ─────────►    SQL Query / ORM / Data Warehouse
-    │                               │
-    ▼                               ▼
-LOOP + Calculate  ─────────►    List comprehension + functions
-    │                               │
-    ▼                               ▼
-Filter + Sort     ─────────►    filter() + sort()
-    │                               │
-    ▼                               ▼
-ALV Display       ─────────►    JSON Response + Dashboard
+PeopleCode Flow:                    Python Flow:
+─────────────────                   ────────────
+Run Control record  ─────────►     Query Parameters / Request Body
+    │                                   │
+    ▼                                   ▼
+SQLExec / Fill      ─────────►     SQL Query / ORM / Data Warehouse
+    │                                   │
+    ▼                                   ▼
+For loop + Evaluate ─────────►     List comprehension + functions
+    │                                   │
+    ▼                                   ▼
+Filter rowset       ─────────►     filter() + sort()
+    │                                   │
+    ▼                                   ▼
+GetFile / WriteLine ─────────►     JSON Response + Dashboard
 ```
 
-### Pattern B: RFC Function → REST API
+### Pattern B: Component Interface → REST API
 
 ```
-ABAP Flow:                      Python Flow:
-─────────────                   ────────────
-IMPORTING params  ─────────►    Path/query params or request body
-    │                               │
-    ▼                               ▼
-AUTHORITY-CHECK   ─────────►    Auth middleware (JWT/API key)
-    │                               │
-    ▼                               ▼
-SELECT data       ─────────►    Database query
-    │                               │
-    ▼                               ▼
-Process + calc    ─────────►    Service function
-    │                               │
-    ▼                               ▼
-EXPORTING params  ─────────►    JSON response body
-    │                               │
-    ▼                               ▼
-RAISE exception   ─────────►    HTTPException / error response
+PeopleCode Flow:                    Python Flow:
+─────────────────                   ────────────
+CI.Get() / properties ─────────►   Path/query params or request body
+    │                                   │
+    ▼                                   ▼
+IsUserInRole()       ─────────►    Auth middleware (JWT/API key)
+    │                                   │
+    ▼                                   ▼
+CreateRowset / Fill  ─────────►    Database query
+    │                                   │
+    ▼                                   ▼
+Process + aggregate  ─────────►    Service function
+    │                                   │
+    ▼                                   ▼
+CI output properties ─────────►    JSON response body
+    │                                   │
+    ▼                                   ▼
+Error()              ─────────►    HTTPException / error response
 ```
 
-### Pattern C: IDoc Processing → Event-Driven Service
+### Pattern C: Integration Broker → Event-Driven Service
 
 ```
-ABAP Flow:                      Python Flow:
-─────────────                   ────────────
-IDoc Control rec  ─────────►    Message envelope (ID, type, sender)
-    │                               │
-    ▼                               ▼
-Parse segments    ─────────►    JSON deserialization
-(E1EDK01, etc.)                 (Pydantic model validation)
-    │                               │
-    ▼                               ▼
-Validate data     ─────────►    validate_order() function
-    │                               │
-    ▼                               ▼
-Map to BAPI       ─────────►    Map to target system payload
-    │                               │
-    ▼                               ▼
-BAPI call         ─────────►    Target API call
-    │                               │
-    ▼                               ▼
-COMMIT/ROLLBACK   ─────────►    Transaction commit/rollback
-    │                               │
-    ▼                               ▼
-IDoc status       ─────────►    Processing result record
+PeopleCode Flow:                    Python Flow:
+─────────────────                   ────────────
+%IntBroker.GetMessage() ────────►  Message consumer / webhook
+    │                                   │
+    ▼                                   ▼
+&MSG.GetXmlDoc()       ────────►   JSON deserialization
+XmlNode.FindNode()                 (Pydantic model validation)
+    │                                   │
+    ▼                                   ▼
+Validate fields        ────────►   validate_message() function
+    │                                   │
+    ▼                                   ▼
+Build target XML       ────────►   Build target system payload
+    │                                   │
+    ▼                                   ▼
+CallTargetSystem       ────────►   Target API call (Workday)
+    │                                   │
+    ▼                                   ▼
+CommitWork/RollbackWork ───────►   Transaction commit/rollback
+    │                                   │
+    ▼                                   ▼
+%IntBroker.Publish(resp) ──────►   Processing result record
 ```
 
 ---
 
-## Common ABAP → Python Translations
+## Common PeopleCode → Python Translations
 
-### Internal Table Operations
+### Rowset Operations
 
-```abap
-" ABAP
-LOOP AT lt_data INTO ls_data WHERE status = 'A'.
-  ls_data-amount = ls_data-quantity * ls_data-price.
-  MODIFY lt_data FROM ls_data.
-ENDLOOP.
+```
+/* PeopleCode */
+&rsEmployees = CreateRowset(Record.JOB);
+&rsEmployees.Fill("WHERE BUSINESS_UNIT = :1 AND EMPL_STATUS = :2", &bu, "A");
+
+For &i = 1 To &rsEmployees.ActiveRowCount
+   &rec = &rsEmployees(&i).GetRecord(Record.JOB);
+   &empName = &rec.NAME_DISPLAY.Value;
+End-For;
 ```
 
 ```python
 # Python
-for item in data:
-    if item.status == "A":
-        item.amount = item.quantity * item.price
+employees = [
+    EmployeeRecord(**row)
+    for row in query_results
+    if row["business_unit"] == bu and row["empl_status"] == "A"
+]
+
+for emp in employees:
+    emp_name = emp.name
 ```
 
-### SELECT with JOIN
+### SQLExec with Parameters
 
-```abap
-" ABAP
-SELECT a~matnr b~maktx a~mtart
-  INTO TABLE lt_materials
-  FROM mara AS a
-  INNER JOIN makt AS b ON b~matnr = a~matnr AND b~spras = sy-langu
-  WHERE a~mtart IN s_mtart.
+```
+/* PeopleCode */
+Local string &name, &dept;
+SQLExec("SELECT NAME_DISPLAY, DEPTID FROM PS_PERSONAL_DATA A, PS_JOB B WHERE A.EMPLID = B.EMPLID AND B.EMPLID = :1", &emplId, &name, &dept);
 ```
 
 ```python
 # Python (SQLAlchemy)
-query = (
-    select(Material.number, MaterialText.description, Material.type)
-    .join(MaterialText, MaterialText.material == Material.number)
-    .where(MaterialText.language == locale)
-    .where(Material.type.in_(material_types))
-)
-materials = session.execute(query).all()
+result = session.execute(
+    select(PersonalData.name_display, Job.department_id)
+    .join(Job, Job.employee_id == PersonalData.employee_id)
+    .where(Job.employee_id == empl_id)
+).first()
+name, dept = result.name_display, result.department_id
 ```
 
 ### Error Handling
 
-```abap
-" ABAP
-CALL FUNCTION 'BAPI_SALESORDER_CREATEFROMDAT2'
-  EXPORTING ...
-  IMPORTING salesdocument = lv_vbeln
-  TABLES return = lt_return.
-
-LOOP AT lt_return INTO ls_ret WHERE type CA 'EA'.
-  lv_has_error = abap_true.
-ENDLOOP.
-
-IF lv_has_error = abap_true.
-  CALL FUNCTION 'BAPI_TRANSACTION_ROLLBACK'.
-ELSE.
-  CALL FUNCTION 'BAPI_TRANSACTION_COMMIT' EXPORTING wait = 'X'.
-ENDIF.
+```
+/* PeopleCode */
+try
+   &result = CallTargetSystem(&payload);
+   CommitWork();
+catch Exception &ex
+   RollbackWork();
+   &errorMsg = &ex.ToString();
+   Error("Processing failed: " | &errorMsg);
+end-try;
 ```
 
 ```python
 # Python
 try:
-    order_number = create_order(order_data)
+    result = call_target_system(payload)
     db.commit()
-    return OrderResult(status="created", order_number=order_number)
-except OrderCreationError as exc:
+    return SyncResult(status=ProcessingStatus.SUCCESS, ...)
+except Exception as exc:
     db.rollback()
-    return OrderResult(status="failed", errors=[str(exc)])
+    return SyncResult(status=ProcessingStatus.ERROR, error_messages=[str(exc)])
+```
+
+### Evaluate Block (Status Mapping)
+
+```
+/* PeopleCode */
+Evaluate &emplStatus
+When = "A"
+   &category = "ACTIVE";
+   Break;
+When = "L"
+When = "P"
+   &category = "LOA";
+   Break;
+When = "T"
+When = "D"
+   &category = "TERMINATED";
+   Break;
+When-Other
+   &category = "LOA";
+   Break;
+End-Evaluate;
+```
+
+```python
+# Python
+STATUS_MAP: dict[str, StatusCategory] = {
+    "A": StatusCategory.ACTIVE,
+    "L": StatusCategory.LOA,
+    "P": StatusCategory.LOA,
+    "T": StatusCategory.TERMINATED,
+    "D": StatusCategory.TERMINATED,
+    "R": StatusCategory.RETIRED,
+}
+category = STATUS_MAP.get(empl_status, StatusCategory.LOA)
 ```
 
 ---
@@ -291,10 +333,10 @@ Before marking any migrated object as complete:
 
 - [ ] All unit tests pass
 - [ ] Code follows project style guide (PEP 8, type hints, docstrings)
-- [ ] No ABAP-isms in Python (e.g., SY-SUBRC patterns, INITIAL checks)
+- [ ] No PeopleCode-isms in Python (e.g., &variable naming, .Value access patterns)
 - [ ] Pydantic models validate input/output correctly
 - [ ] Error messages are clear and actionable
 - [ ] Logging captures key business events
-- [ ] Migration comments reference original ABAP line/form names
+- [ ] Migration comments reference original PeopleCode step/method names
 - [ ] No hardcoded values that should be configurable
 - [ ] Performance is acceptable for expected data volumes

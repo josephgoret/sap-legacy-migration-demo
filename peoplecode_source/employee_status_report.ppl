@@ -1,0 +1,320 @@
+/*----------------------------------------------------------------------*/
+/* Application Engine: HR_EMP_STATUS                                    */
+/*----------------------------------------------------------------------*/
+/* Employee Status Report — Application Engine PeopleCode               */
+/* Generates a categorized employee status report by querying            */
+/* PS_JOB, PS_PERSONAL_DATA, and PS_EMPLOYMENT tables.                  */
+/* Calculates status categories: Active, LOA, Terminated, Retired.      */
+/* Output written to process output file for downstream consumption.    */
+/*                                                                       */
+/* Created: 2012-04-18  Author: GBLHCM-DEV                             */
+/* Changed: 2019-08-22  Last bundle: HR_RPT_0847                        */
+/*----------------------------------------------------------------------*/
+
+/* Step: Init — Initialize run control parameters */
+
+Local Rowset &rsRunCtl;
+Local Record &recRunCtl;
+Local string &businessUnit, &deptId, &asOfDate;
+Local number &staleDays;
+
+&rsRunCtl = CreateRowset(Record.RUN_CNTL_HR);
+&rsRunCtl.Fill("WHERE OPRID = %OperatorId AND RUN_CNTL_ID = %RunControl");
+
+If &rsRunCtl.ActiveRowCount < 1 Then
+   MessageBox(0, "", 0, 0, "Run Control not found for operator " | %OperatorId);
+   Exit;
+End-If;
+
+&recRunCtl = &rsRunCtl(1).GetRecord(Record.RUN_CNTL_HR);
+&businessUnit = &recRunCtl.BUSINESS_UNIT.Value;
+&deptId = &recRunCtl.DEPTID.Value;
+&asOfDate = &recRunCtl.ASOFDATE.Value;
+&staleDays = &recRunCtl.STALE_DAYS.Value;
+
+If &staleDays = 0 Then
+   &staleDays = 180;
+End-If;
+
+/*----------------------------------------------------------------------*/
+/* Step: Fetch — Query employee data from HR tables                     */
+/*----------------------------------------------------------------------*/
+
+Local Rowset &rsEmployees;
+Local Record &recJob;
+Local string &sql;
+Local number &i;
+
+&rsEmployees = CreateRowset(Record.DERIVED_HR);
+
+&sql = "SELECT A.EMPLID, B.NAME_DISPLAY, B.BIRTHDATE, A.BUSINESS_UNIT, " |
+       "A.DEPTID, C.DESCR AS DEPT_DESCR, A.JOBCODE, D.DESCR AS JOB_TITLE, " |
+       "A.EMPL_STATUS, A.HR_STATUS, A.EFFDT, A.ACTION, A.ACTION_REASON, " |
+       "A.ANNUAL_RT, A.CURRENCY_CD, E.HIRE_DT, E.REHIRE_DT, E.TERMINATION_DT " |
+       "FROM PS_JOB A " |
+       "INNER JOIN PS_PERSONAL_DATA B ON B.EMPLID = A.EMPLID " |
+       "LEFT OUTER JOIN PS_DEPT_TBL C ON C.DEPTID = A.DEPTID " |
+       "  AND C.SETID = A.SETID_DEPT AND C.EFFDT = " |
+       "  (SELECT MAX(C2.EFFDT) FROM PS_DEPT_TBL C2 " |
+       "   WHERE C2.DEPTID = C.DEPTID AND C2.SETID = C.SETID " |
+       "   AND C2.EFFDT <= %DateIn(:1)) " |
+       "LEFT OUTER JOIN PS_JOBCODE_TBL D ON D.JOBCODE = A.JOBCODE " |
+       "  AND D.SETID = A.SETID_JOBCODE AND D.EFFDT = " |
+       "  (SELECT MAX(D2.EFFDT) FROM PS_JOBCODE_TBL D2 " |
+       "   WHERE D2.JOBCODE = D.JOBCODE AND D2.SETID = D.SETID " |
+       "   AND D2.EFFDT <= %DateIn(:2)) " |
+       "LEFT OUTER JOIN PS_EMPLOYMENT E ON E.EMPLID = A.EMPLID " |
+       "  AND E.EMPL_RCD = A.EMPL_RCD " |
+       "WHERE A.BUSINESS_UNIT = :3 " |
+       "AND A.EFFDT = (SELECT MAX(A2.EFFDT) FROM PS_JOB A2 " |
+       "  WHERE A2.EMPLID = A.EMPLID AND A2.EMPL_RCD = A.EMPL_RCD " |
+       "  AND A2.EFFDT <= %DateIn(:4)) " |
+       "AND A.EFFSEQ = (SELECT MAX(A3.EFFSEQ) FROM PS_JOB A3 " |
+       "  WHERE A3.EMPLID = A.EMPLID AND A3.EMPL_RCD = A.EMPL_RCD " |
+       "  AND A3.EFFDT = A.EFFDT)";
+
+/* Add optional department filter */
+If All(&deptId) Then
+   &sql = &sql | " AND A.DEPTID = :5";
+   SQLExec(&sql, &asOfDate, &asOfDate, &businessUnit, &asOfDate, &deptId, &rsEmployees);
+Else
+   SQLExec(&sql, &asOfDate, &asOfDate, &businessUnit, &asOfDate, &rsEmployees);
+End-If;
+
+If &rsEmployees.ActiveRowCount = 0 Then
+   MessageBox(0, "", 0, 0, "No employees found for Business Unit " | &businessUnit);
+   Exit;
+End-If;
+
+/*----------------------------------------------------------------------*/
+/* Step: Calculate — Determine employee status categories               */
+/*----------------------------------------------------------------------*/
+
+Local string &emplStatus, &hrStatus, &statusCategory;
+Local date &hireDate, &termDate, &lastActionDate, &today;
+Local number &yearsOfService;
+Local Rowset &rsResults;
+Local Record &recResult;
+
+&today = %Date;
+&rsResults = CreateRowset(Record.DERIVED_HR);
+
+For &i = 1 To &rsEmployees.ActiveRowCount
+
+   &recJob = &rsEmployees(&i).GetRecord(Record.DERIVED_HR);
+   &emplStatus = &recJob.EMPL_STATUS.Value;
+   &hrStatus = &recJob.HR_STATUS.Value;
+   &hireDate = &recJob.HIRE_DT.Value;
+   &termDate = &recJob.TERMINATION_DT.Value;
+   &lastActionDate = &recJob.EFFDT.Value;
+
+   /* Determine status category */
+   Evaluate &emplStatus
+   When = "A"
+      /* Active employee */
+      &statusCategory = "ACTIVE";
+      Break;
+   When = "L"
+      /* Leave of Absence */
+      &statusCategory = "LOA";
+      Break;
+   When = "P"
+      /* Paid Leave of Absence */
+      &statusCategory = "LOA";
+      Break;
+   When = "T"
+      /* Terminated */
+      &statusCategory = "TERMINATED";
+      Break;
+   When = "D"
+      /* Deceased */
+      &statusCategory = "TERMINATED";
+      Break;
+   When = "R"
+      /* Retired */
+      &statusCategory = "RETIRED";
+      Break;
+   When-Other
+      /* Suspended, Short Work, etc. — treat as LOA */
+      &statusCategory = "LOA";
+      Break;
+   End-Evaluate;
+
+   /* Override: if HR_STATUS is Inactive but EMPL_STATUS is Active,
+      flag as terminated (data inconsistency handling) */
+   If &hrStatus = "I" And &statusCategory = "ACTIVE" Then
+      &statusCategory = "TERMINATED";
+   End-If;
+
+   /* Calculate years of service */
+   If All(&hireDate) Then
+      &yearsOfService = DatePart(Year, &today) - DatePart(Year, &hireDate);
+   Else
+      &yearsOfService = 0;
+   End-If;
+
+   /* Calculate headcount flag — only Active and LOA count */
+   Local string &headcountFlag;
+   If &statusCategory = "ACTIVE" Or &statusCategory = "LOA" Then
+      &headcountFlag = "Y";
+   Else
+      &headcountFlag = "N";
+   End-If;
+
+   /* Determine if recently actioned (within stale threshold) */
+   Local string &recentlyActioned;
+   Local number &daysSinceAction;
+   &daysSinceAction = &today - &lastActionDate;
+   If &daysSinceAction <= &staleDays Then
+      &recentlyActioned = "Y";
+   Else
+      &recentlyActioned = "N";
+   End-If;
+
+   /* Store result row */
+   &recResult = &rsResults(&rsResults.ActiveRowCount + 1).GetRecord(Record.DERIVED_HR);
+   &recResult.EMPLID.Value = &recJob.EMPLID.Value;
+   &recResult.NAME_DISPLAY.Value = &recJob.NAME_DISPLAY.Value;
+   &recResult.BUSINESS_UNIT.Value = &recJob.BUSINESS_UNIT.Value;
+   &recResult.DEPTID.Value = &recJob.DEPTID.Value;
+   &recResult.JOBCODE.Value = &recJob.JOBCODE.Value;
+   &recResult.EMPL_STATUS.Value = &emplStatus;
+   &recResult.STATUS_CATEGORY.Value = &statusCategory;
+   &recResult.HIRE_DT.Value = &hireDate;
+   &recResult.TERMINATION_DT.Value = &termDate;
+   &recResult.EFFDT.Value = &lastActionDate;
+   &recResult.ANNUAL_RT.Value = &recJob.ANNUAL_RT.Value;
+   &recResult.CURRENCY_CD.Value = &recJob.CURRENCY_CD.Value;
+   &recResult.YEARS_OF_SERVICE.Value = &yearsOfService;
+   &recResult.HEADCOUNT_FLAG.Value = &headcountFlag;
+   &recResult.RECENTLY_ACTIONED.Value = &recentlyActioned;
+
+End-For;
+
+/*----------------------------------------------------------------------*/
+/* Step: Filter — Apply status category filters from run control        */
+/*----------------------------------------------------------------------*/
+
+Local Rowset &rsFiltered;
+Local string &showActive, &showLOA, &showTerminated, &showRetired;
+
+&showActive = &recRunCtl.SHOW_ACTIVE.Value;
+&showLOA = &recRunCtl.SHOW_LOA.Value;
+&showTerminated = &recRunCtl.SHOW_TERMINATED.Value;
+&showRetired = &recRunCtl.SHOW_RETIRED.Value;
+
+/* Default: show Active and LOA */
+If None(&showActive) Then &showActive = "Y"; End-If;
+If None(&showLOA) Then &showLOA = "Y"; End-If;
+If None(&showTerminated) Then &showTerminated = "N"; End-If;
+If None(&showRetired) Then &showRetired = "N"; End-If;
+
+&rsFiltered = CreateRowset(Record.DERIVED_HR);
+
+For &i = 1 To &rsResults.ActiveRowCount
+   &recResult = &rsResults(&i).GetRecord(Record.DERIVED_HR);
+   &statusCategory = &recResult.STATUS_CATEGORY.Value;
+
+   Evaluate &statusCategory
+   When = "ACTIVE"
+      If &showActive = "Y" Then
+         &rsFiltered(&rsFiltered.ActiveRowCount + 1).GetRecord(Record.DERIVED_HR).CopyFieldsFrom(&recResult);
+      End-If;
+      Break;
+   When = "LOA"
+      If &showLOA = "Y" Then
+         &rsFiltered(&rsFiltered.ActiveRowCount + 1).GetRecord(Record.DERIVED_HR).CopyFieldsFrom(&recResult);
+      End-If;
+      Break;
+   When = "TERMINATED"
+      If &showTerminated = "Y" Then
+         &rsFiltered(&rsFiltered.ActiveRowCount + 1).GetRecord(Record.DERIVED_HR).CopyFieldsFrom(&recResult);
+      End-If;
+      Break;
+   When = "RETIRED"
+      If &showRetired = "Y" Then
+         &rsFiltered(&rsFiltered.ActiveRowCount + 1).GetRecord(Record.DERIVED_HR).CopyFieldsFrom(&recResult);
+      End-If;
+      Break;
+   End-Evaluate;
+End-For;
+
+/*----------------------------------------------------------------------*/
+/* Step: Summary — Generate aggregate counts                            */
+/*----------------------------------------------------------------------*/
+
+Local number &activeCount, &loaCount, &termCount, &retiredCount;
+Local number &totalHeadcount, &totalAnnualComp;
+
+&activeCount = 0;
+&loaCount = 0;
+&termCount = 0;
+&retiredCount = 0;
+&totalHeadcount = 0;
+&totalAnnualComp = 0;
+
+For &i = 1 To &rsFiltered.ActiveRowCount
+   &recResult = &rsFiltered(&i).GetRecord(Record.DERIVED_HR);
+   &statusCategory = &recResult.STATUS_CATEGORY.Value;
+
+   Evaluate &statusCategory
+   When = "ACTIVE"
+      &activeCount = &activeCount + 1;
+      Break;
+   When = "LOA"
+      &loaCount = &loaCount + 1;
+      Break;
+   When = "TERMINATED"
+      &termCount = &termCount + 1;
+      Break;
+   When = "RETIRED"
+      &retiredCount = &retiredCount + 1;
+      Break;
+   End-Evaluate;
+
+   If &recResult.HEADCOUNT_FLAG.Value = "Y" Then
+      &totalHeadcount = &totalHeadcount + 1;
+   End-If;
+
+   &totalAnnualComp = &totalAnnualComp + &recResult.ANNUAL_RT.Value;
+End-For;
+
+/*----------------------------------------------------------------------*/
+/* Step: Output — Write results to process output                       */
+/*----------------------------------------------------------------------*/
+
+Local File &fileOutput;
+Local string &outputPath;
+
+&outputPath = GetEnv("PS_SERVDIR") | "/files/HR_EMP_STATUS_" | &businessUnit | "_" | %DateTimeOut(%DateTime) | ".csv";
+&fileOutput = GetFile(&outputPath, "W", "A", %FilePath_Absolute);
+
+If &fileOutput.IsOpen Then
+   /* Header row */
+   &fileOutput.WriteLine("EMPLID,NAME,BUSINESS_UNIT,DEPTID,JOBCODE,EMPL_STATUS,STATUS_CATEGORY,HIRE_DT,TERMINATION_DT,LAST_ACTION_DT,ANNUAL_RT,CURRENCY,YEARS_OF_SERVICE,HEADCOUNT,RECENTLY_ACTIONED");
+
+   For &i = 1 To &rsFiltered.ActiveRowCount
+      &recResult = &rsFiltered(&i).GetRecord(Record.DERIVED_HR);
+      &fileOutput.WriteLine(
+         &recResult.EMPLID.Value | "," |
+         &recResult.NAME_DISPLAY.Value | "," |
+         &recResult.BUSINESS_UNIT.Value | "," |
+         &recResult.DEPTID.Value | "," |
+         &recResult.JOBCODE.Value | "," |
+         &recResult.EMPL_STATUS.Value | "," |
+         &recResult.STATUS_CATEGORY.Value | "," |
+         &recResult.HIRE_DT.Value | "," |
+         &recResult.TERMINATION_DT.Value | "," |
+         &recResult.EFFDT.Value | "," |
+         &recResult.ANNUAL_RT.Value | "," |
+         &recResult.CURRENCY_CD.Value | "," |
+         &recResult.YEARS_OF_SERVICE.Value | "," |
+         &recResult.HEADCOUNT_FLAG.Value | "," |
+         &recResult.RECENTLY_ACTIONED.Value);
+   End-For;
+
+   &fileOutput.Close();
+   MessageBox(0, "", 0, 0, "Report generated: " | String(&rsFiltered.ActiveRowCount) | " employees written to " | &outputPath);
+Else
+   MessageBox(0, "", 0, 0, "Error: Unable to open output file " | &outputPath);
+End-If;

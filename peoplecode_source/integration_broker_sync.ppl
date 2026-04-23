@@ -1,0 +1,295 @@
+/*----------------------------------------------------------------------*/
+/* Integration Broker: EMP_SYNC_SUB                                     */
+/*----------------------------------------------------------------------*/
+/* Subscription PeopleCode for employee hire/transfer/termination sync.  */
+/* Receives XML messages from Integration Broker, parses employee data,  */
+/* validates required fields, and maps to target system API.             */
+/* Handles message types: HIRE, TRANSFER, TERMINATION, REHIRE.          */
+/*                                                                       */
+/* Created: 2013-07-22  Author: GBLHCM-DEV                             */
+/* Changed: 2020-12-03  Last bundle: HR_INT_0956                        */
+/*----------------------------------------------------------------------*/
+
+/* IB Subscription Handler: EMP_SYNC.OnNotify */
+
+Local Message &MSG;
+Local XmlDoc &xmlDoc;
+Local XmlNode &rootNode, &headerNode, &employeeNode, &jobNode, &compNode;
+Local XmlNode &addrNode, &deptNode;
+Local string &msgId, &msgType, &senderSystem;
+Local string &transactionType;
+Local boolean &hasError;
+Local string &errorMessages;
+
+/* Get the inbound message from Integration Broker */
+&MSG = %IntBroker.GetMessage();
+&xmlDoc = &MSG.GetXmlDoc();
+&msgId = &MSG.TransactionId;
+
+If &xmlDoc = Null Then
+   Local Message &respMsg;
+   &respMsg = CreateMessage(Operation.EMP_SYNC_RESP, %IntBroker_Response);
+   &respMsg.GetXmlDoc().ParseXmlString("<Response><Status>ERROR</Status><Message>Null XML document received</Message></Response>");
+   %IntBroker.Publish(&respMsg);
+   Return;
+End-If;
+
+&rootNode = &xmlDoc.DocumentElement;
+
+/*----------------------------------------------------------------------*/
+/* Parse Header Information                                             */
+/*----------------------------------------------------------------------*/
+
+&headerNode = &rootNode.FindNode("Header");
+If &headerNode <> Null Then
+   &msgType = &headerNode.FindNode("MessageType").NodeValue;
+   &senderSystem = &headerNode.FindNode("SenderSystem").NodeValue;
+   &transactionType = &headerNode.FindNode("TransactionType").NodeValue;
+Else
+   &msgType = "EMP_SYNC";
+   &senderSystem = "UNKNOWN";
+   &transactionType = "UNKNOWN";
+End-If;
+
+/*----------------------------------------------------------------------*/
+/* Parse Employee Data                                                  */
+/*----------------------------------------------------------------------*/
+
+Local string &emplId, &name, &firstName, &lastName;
+Local string &businessUnit, &deptId, &jobCode, &positionNbr;
+Local string &emplStatus, &action, &actionReason;
+Local date &effdt, &hireDt, &termDt;
+Local number &annualRt;
+Local string &currencyCd;
+Local string &address1, &city, &state, &postal, &country;
+Local string &emailAddr, &phone;
+
+&employeeNode = &rootNode.FindNode("EmployeeData");
+
+If &employeeNode = Null Then
+   /* No employee data — return error */
+   &hasError = True;
+   &errorMessages = "Missing EmployeeData element in message";
+Else
+   &emplId = &employeeNode.FindNode("EMPLID").NodeValue;
+   &firstName = &employeeNode.FindNode("FIRST_NAME").NodeValue;
+   &lastName = &employeeNode.FindNode("LAST_NAME").NodeValue;
+   &name = &lastName | ", " | &firstName;
+
+   /* Job Data */
+   &jobNode = &employeeNode.FindNode("JobData");
+   If &jobNode <> Null Then
+      &businessUnit = &jobNode.FindNode("BUSINESS_UNIT").NodeValue;
+      &deptId = &jobNode.FindNode("DEPTID").NodeValue;
+      &jobCode = &jobNode.FindNode("JOBCODE").NodeValue;
+      &positionNbr = &jobNode.FindNode("POSITION_NBR").NodeValue;
+      &emplStatus = &jobNode.FindNode("EMPL_STATUS").NodeValue;
+      &action = &jobNode.FindNode("ACTION").NodeValue;
+      &actionReason = &jobNode.FindNode("ACTION_REASON").NodeValue;
+      &effdt = DateValue(&jobNode.FindNode("EFFDT").NodeValue);
+
+      /* Parse hire/termination dates based on transaction type */
+      Evaluate &transactionType
+      When = "HIRE"
+         &hireDt = &effdt;
+         Break;
+      When = "REHIRE"
+         &hireDt = &effdt;
+         Break;
+      When = "TERMINATION"
+         &termDt = &effdt;
+         Break;
+      End-Evaluate;
+   End-If;
+
+   /* Compensation Data */
+   &compNode = &employeeNode.FindNode("CompensationData");
+   If &compNode <> Null Then
+      &annualRt = Value(&compNode.FindNode("ANNUAL_RT").NodeValue);
+      &currencyCd = &compNode.FindNode("CURRENCY_CD").NodeValue;
+   Else
+      &annualRt = 0;
+      &currencyCd = "USD";
+   End-If;
+
+   /* Address Data */
+   &addrNode = &employeeNode.FindNode("AddressData");
+   If &addrNode <> Null Then
+      &address1 = &addrNode.FindNode("ADDRESS1").NodeValue;
+      &city = &addrNode.FindNode("CITY").NodeValue;
+      &state = &addrNode.FindNode("STATE").NodeValue;
+      &postal = &addrNode.FindNode("POSTAL").NodeValue;
+      &country = &addrNode.FindNode("COUNTRY").NodeValue;
+      &emailAddr = &addrNode.FindNode("EMAILID").NodeValue;
+      &phone = &addrNode.FindNode("PHONE").NodeValue;
+   End-If;
+End-If;
+
+/*----------------------------------------------------------------------*/
+/* Validate Required Fields                                             */
+/*----------------------------------------------------------------------*/
+
+&hasError = False;
+&errorMessages = "";
+
+If None(&emplId) Then
+   &hasError = True;
+   &errorMessages = &errorMessages | "Missing EMPLID; ";
+End-If;
+
+If None(&transactionType) Or &transactionType = "UNKNOWN" Then
+   &hasError = True;
+   &errorMessages = &errorMessages | "Missing or invalid TransactionType; ";
+End-If;
+
+If None(&businessUnit) Then
+   &hasError = True;
+   &errorMessages = &errorMessages | "Missing BUSINESS_UNIT; ";
+End-If;
+
+If None(&effdt) Then
+   &hasError = True;
+   &errorMessages = &errorMessages | "Missing EFFDT; ";
+End-If;
+
+/* Transaction-specific validations */
+Evaluate &transactionType
+When = "HIRE"
+   If None(&firstName) Or None(&lastName) Then
+      &hasError = True;
+      &errorMessages = &errorMessages | "HIRE requires FIRST_NAME and LAST_NAME; ";
+   End-If;
+   If None(&jobCode) Then
+      &hasError = True;
+      &errorMessages = &errorMessages | "HIRE requires JOBCODE; ";
+   End-If;
+   Break;
+When = "TRANSFER"
+   If None(&deptId) And None(&jobCode) And None(&positionNbr) Then
+      &hasError = True;
+      &errorMessages = &errorMessages | "TRANSFER requires at least one of DEPTID, JOBCODE, or POSITION_NBR; ";
+   End-If;
+   Break;
+When = "TERMINATION"
+   If None(&action) Then
+      &hasError = True;
+      &errorMessages = &errorMessages | "TERMINATION requires ACTION; ";
+   End-If;
+   Break;
+End-Evaluate;
+
+/*----------------------------------------------------------------------*/
+/* Process — Map to target system and execute                           */
+/*----------------------------------------------------------------------*/
+
+Local string &targetPayload;
+Local string &processingStatus;
+Local string &resultMsg;
+Local string &targetEmpId;
+
+If &hasError Then
+   &processingStatus = "ERROR";
+   &resultMsg = "Validation failed for message " | &msgId | ": " | &errorMessages;
+   /* Log error to message monitor */
+   %IntBroker.SetStatus(%IB_Status_Error);
+Else
+
+   /* Build target system payload */
+   Local XmlDoc &targetXml;
+   &targetXml = CreateXmlDoc("");
+
+   Local XmlNode &targetRoot;
+   &targetRoot = &targetXml.CreateDocumentElement("WorkdayRequest");
+
+   Evaluate &transactionType
+   When = "HIRE"
+      /* Map PeopleSoft hire to Workday Hire_Employee */
+      &targetRoot.AddElement("Operation").NodeValue = "Hire_Employee";
+      &targetRoot.AddElement("EmployeeID").NodeValue = &emplId;
+      &targetRoot.AddElement("LegalName_First").NodeValue = &firstName;
+      &targetRoot.AddElement("LegalName_Last").NodeValue = &lastName;
+      &targetRoot.AddElement("HireDate").NodeValue = String(&hireDt);
+      &targetRoot.AddElement("BusinessUnit").NodeValue = &businessUnit;
+      &targetRoot.AddElement("Department").NodeValue = &deptId;
+      &targetRoot.AddElement("JobProfile").NodeValue = &jobCode;
+      &targetRoot.AddElement("Position").NodeValue = &positionNbr;
+      &targetRoot.AddElement("AnnualRate").NodeValue = String(&annualRt);
+      &targetRoot.AddElement("Currency").NodeValue = &currencyCd;
+      Break;
+
+   When = "REHIRE"
+      /* Map PeopleSoft rehire to Workday Hire_Employee with rehire flag */
+      &targetRoot.AddElement("Operation").NodeValue = "Hire_Employee";
+      &targetRoot.AddElement("EmployeeID").NodeValue = &emplId;
+      &targetRoot.AddElement("RehireFlag").NodeValue = "Y";
+      &targetRoot.AddElement("HireDate").NodeValue = String(&hireDt);
+      &targetRoot.AddElement("BusinessUnit").NodeValue = &businessUnit;
+      &targetRoot.AddElement("Department").NodeValue = &deptId;
+      &targetRoot.AddElement("JobProfile").NodeValue = &jobCode;
+      Break;
+
+   When = "TRANSFER"
+      /* Map PeopleSoft transfer to Workday Change_Job */
+      &targetRoot.AddElement("Operation").NodeValue = "Change_Job";
+      &targetRoot.AddElement("EmployeeID").NodeValue = &emplId;
+      &targetRoot.AddElement("EffectiveDate").NodeValue = String(&effdt);
+      &targetRoot.AddElement("Department").NodeValue = &deptId;
+      &targetRoot.AddElement("JobProfile").NodeValue = &jobCode;
+      &targetRoot.AddElement("Position").NodeValue = &positionNbr;
+      &targetRoot.AddElement("Reason").NodeValue = &actionReason;
+      Break;
+
+   When = "TERMINATION"
+      /* Map PeopleSoft termination to Workday Terminate_Employee */
+      &targetRoot.AddElement("Operation").NodeValue = "Terminate_Employee";
+      &targetRoot.AddElement("EmployeeID").NodeValue = &emplId;
+      &targetRoot.AddElement("TerminationDate").NodeValue = String(&termDt);
+      &targetRoot.AddElement("TerminationAction").NodeValue = &action;
+      &targetRoot.AddElement("TerminationReason").NodeValue = &actionReason;
+      Break;
+   End-Evaluate;
+
+   /* Call target system (simulated — in production this would be
+      an HTTP POST to the Workday SOAP/REST endpoint) */
+   try
+      /* &targetEmpId = CallTargetSystem(&targetXml); */
+      &targetEmpId = &emplId;  /* Simulated success */
+      &processingStatus = "SUCCESS";
+      &resultMsg = "Employee " | &emplId | " " | Lower(&transactionType) | " processed. Target ID: " | &targetEmpId;
+
+      /* Commit the transaction */
+      CommitWork();
+
+   catch Exception &ex
+      /* Rollback on failure */
+      RollbackWork();
+      &processingStatus = "ERROR";
+      &resultMsg = "Target system error for " | &emplId | ": " | &ex.ToString();
+   end-try;
+
+End-If;
+
+/*----------------------------------------------------------------------*/
+/* Send Response Message                                                */
+/*----------------------------------------------------------------------*/
+
+Local Message &responseMsg;
+Local XmlDoc &responseXml;
+
+&responseMsg = CreateMessage(Operation.EMP_SYNC_RESP, %IntBroker_Response);
+&responseXml = CreateXmlDoc("");
+
+Local XmlNode &respRoot;
+&respRoot = &responseXml.CreateDocumentElement("EmpSyncResponse");
+&respRoot.AddElement("MessageID").NodeValue = &msgId;
+&respRoot.AddElement("Status").NodeValue = &processingStatus;
+&respRoot.AddElement("Message").NodeValue = &resultMsg;
+&respRoot.AddElement("TransactionType").NodeValue = &transactionType;
+&respRoot.AddElement("EMPLID").NodeValue = &emplId;
+
+If &processingStatus = "SUCCESS" Then
+   &respRoot.AddElement("TargetEmployeeID").NodeValue = &targetEmpId;
+End-If;
+
+&responseMsg.SetXmlDoc(&responseXml);
+%IntBroker.Publish(&responseMsg);

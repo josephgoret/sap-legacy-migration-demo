@@ -1,2 +1,2 @@
-# SAP Migration Target — Python Services
-# Migrated from ABAP custom objects using Devin AI
+# PeopleSoft Migration Target — Python Services
+# Migrated from PeopleCode custom objects using Devin AI
