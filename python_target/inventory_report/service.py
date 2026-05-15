@@ -12,7 +12,8 @@ Migration notes:
 - Selection screen → query parameters / request body
 """
 
-from datetime import UTC, date, datetime, timedelta
+import logging
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import Optional
 
@@ -23,6 +24,8 @@ from .models import (
     InventoryReportSummary,
     StockStatus,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def calculate_stock_status(
@@ -91,7 +94,6 @@ def filter_by_status(
 def build_summary(items: list[InventoryItem]) -> InventoryReportSummary:
     """Aggregate summary statistics — added value beyond the original ALV."""
     summary = InventoryReportSummary()
-    today = date.today()
 
     for item in items:
         if item.stock_status == StockStatus.CRITICAL:
@@ -183,6 +185,14 @@ def generate_inventory_report(
     items.sort(key=lambda x: (status_order[x.stock_status], x.plant))
 
     summary = build_summary(items)
+
+    logger.info(
+        "Inventory report generated: %d items (%d critical, %d warning, %d healthy)",
+        len(items),
+        summary.critical_count,
+        summary.warning_count,
+        summary.healthy_count,
+    )
 
     return InventoryReportResponse(
         generated_at=datetime.now(UTC),

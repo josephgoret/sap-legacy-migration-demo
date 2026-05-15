@@ -15,7 +15,6 @@ from python_target.vendor_lookup.models import (
     VendorLookupRequest,
 )
 from python_target.vendor_lookup.service import (
-    AuthorizationError,
     VendorNotFoundError,
     calculate_po_aggregates,
     lookup_vendor,
