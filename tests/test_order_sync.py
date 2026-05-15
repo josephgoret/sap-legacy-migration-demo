@@ -19,7 +19,6 @@ from python_target.order_sync.models import (
     PartnerRole,
 )
 from python_target.order_sync.service import (
-    OrderValidationError,
     parse_idoc_to_order,
     process_order_batch,
     process_single_order,

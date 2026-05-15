@@ -12,6 +12,7 @@ Migration notes:
 - BAPI-style return code → HTTP status codes + response body
 """
 
+import logging
 from datetime import date, timedelta
 from decimal import Decimal
 from typing import Optional
@@ -22,6 +23,8 @@ from .models import (
     VendorLookupRequest,
     VendorLookupResponse,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class VendorNotFoundError(Exception):
@@ -140,6 +143,14 @@ def lookup_vendor(
     total_value, open_count = calculate_po_aggregates(po_items)
     vendor.total_po_value = total_value
     vendor.open_po_count = open_count
+
+    logger.info(
+        "Vendor %s lookup successful: %d PO items, total value %s, %d open",
+        request.vendor_number,
+        len(po_items),
+        total_value,
+        open_count,
+    )
 
     return VendorLookupResponse(
         vendor=vendor,

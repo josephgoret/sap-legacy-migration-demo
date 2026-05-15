@@ -14,7 +14,6 @@ import pytest
 from python_target.inventory_report.models import (
     InventoryFilters,
     InventoryItem,
-    InventoryReportSummary,
     StockStatus,
 )
 from python_target.inventory_report.service import (
@@ -272,3 +271,67 @@ class TestGenerateInventoryReport:
         report = generate_inventory_report([], filters)
         assert report.total_items == 0
         assert report.items == []
+
+
+# ---------------------------------------------------------------------------
+# build_summary — aggregation of report statistics
+# ---------------------------------------------------------------------------
+
+class TestBuildSummary:
+
+    def _make_item(self, status: StockStatus, stock: Decimal, reorder: Decimal, value: Decimal) -> InventoryItem:
+        return InventoryItem(
+            material_number="MAT-001",
+            description="Test",
+            material_type="FERT",
+            material_group="001",
+            plant="1000",
+            storage_location="0001",
+            available_stock=stock,
+            total_stock=stock,
+            reorder_point=reorder,
+            stock_status=status,
+            stock_percentage=Decimal("100"),
+            stock_value=value,
+        )
+
+    def test_counts_by_status(self):
+        """Verify correct counting of items per status category."""
+        items = [
+            self._make_item(StockStatus.CRITICAL, Decimal("0"), Decimal("100"), Decimal("0")),
+            self._make_item(StockStatus.CRITICAL, Decimal("50"), Decimal("100"), Decimal("500")),
+            self._make_item(StockStatus.WARNING, Decimal("120"), Decimal("100"), Decimal("1200")),
+            self._make_item(StockStatus.HEALTHY, Decimal("200"), Decimal("100"), Decimal("2000")),
+        ]
+        summary = build_summary(items)
+        assert summary.critical_count == 2
+        assert summary.warning_count == 1
+        assert summary.healthy_count == 1
+
+    def test_total_stock_value(self):
+        """Verify total stock value aggregation."""
+        items = [
+            self._make_item(StockStatus.CRITICAL, Decimal("10"), Decimal("100"), Decimal("100")),
+            self._make_item(StockStatus.HEALTHY, Decimal("200"), Decimal("100"), Decimal("2000")),
+        ]
+        summary = build_summary(items)
+        assert summary.total_stock_value == Decimal("2100")
+
+    def test_materials_below_reorder(self):
+        """Count materials where available_stock < reorder_point."""
+        items = [
+            self._make_item(StockStatus.CRITICAL, Decimal("50"), Decimal("100"), Decimal("500")),
+            self._make_item(StockStatus.HEALTHY, Decimal("200"), Decimal("100"), Decimal("2000")),
+            self._make_item(StockStatus.CRITICAL, Decimal("0"), Decimal("0"), Decimal("0")),
+        ]
+        summary = build_summary(items)
+        assert summary.materials_below_reorder == 1
+
+    def test_empty_items(self):
+        """Summary from an empty item list."""
+        summary = build_summary([])
+        assert summary.critical_count == 0
+        assert summary.warning_count == 0
+        assert summary.healthy_count == 0
+        assert summary.total_stock_value == Decimal("0")
+        assert summary.materials_below_reorder == 0
