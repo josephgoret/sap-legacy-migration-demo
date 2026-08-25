@@ -127,7 +127,7 @@ Opens only once Phase 5 and Phase 6 are signed off for the object. This is the w
 
 ### Known deviation in this demo
 
-The inventory report migration ([`README.md`](README.md), "The Three Migrations") added **an aggregated summary the original ABAP report didn't have**. That is a functional improvement made during migration, and it contradicts strict equivalence — by the rule above it belongs in Phase 7. In a real migration this would need to be a deliberate, recorded decision (business owner sign-off, and equivalence tests that state the summary is an intentional addition) rather than something that slips in while translating.
+The inventory report migration ([`README.md`](README.md), "The Four Migrations") added **an aggregated summary the original ABAP report didn't have**. That is a functional improvement made during migration, and it contradicts strict equivalence — by the rule above it belongs in Phase 7. In a real migration this would need to be a deliberate, recorded decision (business owner sign-off, and equivalence tests that state the summary is an intentional addition) rather than something that slips in while translating.
 
 ### Interface modernization vs. functional improvement
 

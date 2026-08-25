@@ -7,7 +7,7 @@
 
 ## What This Demo Shows
 
-A mid-size retailer ("Acme Retail Corp") has **hundreds of custom SAP objects** accumulated over 15+ years. This demo walks through three representative migrations — the same patterns Devin executes at scale across an entire custom object inventory.
+A mid-size retailer ("Acme Retail Corp") has **hundreds of custom SAP objects** accumulated over 15+ years. This demo walks through four representative migrations — the same patterns Devin executes at scale across an entire custom object inventory.
 
 Each example includes:
 1. The **original ABAP source code** (realistic, production-style)
@@ -23,12 +23,14 @@ Each example includes:
 sap-migration-demo/
 ├── README.md                           ← You are here
 ├── migration-playbook.md               ← Reusable migration playbook template
+├── migration-checklist.md              ← Per-object, phase-by-phase checklist
 ├── requirements.txt                    ← Python dependencies
 │
 ├── abap_source/                        ← Original ABAP programs
 │   ├── z_inventory_report.abap         ← Custom ALV inventory report
 │   ├── z_rfc_vendor_lookup.abap        ← RFC function module
-│   └── z_idoc_order_sync.abap          ← IDoc processing function
+│   ├── z_idoc_order_sync.abap          ← IDoc processing function
+│   └── z_badi_credit_check.abap        ← BAdI implementation (credit check)
 │
 ├── python_target/                      ← Migrated Python services
 │   ├── inventory_report/
@@ -37,19 +39,23 @@ sap-migration-demo/
 │   ├── vendor_lookup/
 │   │   ├── models.py
 │   │   └── service.py
-│   └── order_sync/
+│   ├── order_sync/
+│   │   ├── models.py
+│   │   └── service.py
+│   └── credit_check/
 │       ├── models.py
 │       └── service.py
 │
 └── tests/                              ← Functional equivalence tests
     ├── test_inventory_report.py
     ├── test_vendor_lookup.py
-    └── test_order_sync.py
+    ├── test_order_sync.py
+    └── test_credit_check.py
 ```
 
 ---
 
-## The Three Migrations
+## The Four Migrations
 
 ### 1. Inventory Report — ALV Report → FastAPI + JSON
 
@@ -87,6 +93,18 @@ sap-migration-demo/
 
 **What Devin did**: Replaced IDoc segment parsing (`CASE lv_segment / WHEN 'E1EDK01'`) with structured JSON deserialization into Pydantic models, translated BAPI_SALESORDER_CREATEFROMDAT2 parameter mapping to a target system API call, preserved the same validation rules (missing sold-to → error, no items → error), and mapped IDoc status records (51=error, 53=success) to `OrderSyncResult` objects.
 
+### 4. Order Credit Check — BAdI Implementation → Service Layer Module
+
+| | ABAP (Before) | Python (After) |
+|---|---|---|
+| **Source** | `ZCL_IM_ORDER_CREDIT_CHECK` | `credit_check/service.py` |
+| **Pattern** | BAdI method on order save → SELECT + SELECT SUM → decide → export result | Service function on pre-aggregated data → decide → result model |
+| **Tables** | KNKK, VBAK, VBAP, LIKP, LIPS, BSID | Data warehouse equivalent |
+| **Key logic** | Credit exposure vs. risk-category tolerance, 90% utilization warning, overdue-item override, delivery block `Z1` | Identical thresholds, same branch order, same reason codes |
+| **Lines** | ~275 ABAP | ~235 Python |
+
+**What Devin did**: Turned the BAdI method into a `check_credit()` function over pre-fetched aggregates (`CreditMaster`, `OpenExposure`), kept the private helper methods as `get_limit_tolerance` / `get_overdue_tolerance` / `calculate_exposure`, and preserved the exact branch order the ABAP relies on — credit block before limit evaluation, `klimk <= 0` returning early, overdue items overriding only a non-blocked result. Boundary behaviour is equivalence-tested (utilization exactly 90% warns, exposure exactly equal to the effective limit does not block, overdue days exactly at tolerance do not block), and ABAP `p ... DECIMALS 2` assignment is emulated with `Decimal.quantize`. Strict equivalence: no improvements, no reordering.
+
 ---
 
 ## Running the Tests
@@ -97,7 +115,7 @@ pip install -r requirements.txt
 pytest tests/ -v
 ```
 
-Expected output: **25+ tests passing**, covering:
+Expected output: **65+ tests passing**, covering:
 - Stock status calculation (all threshold boundaries)
 - Stock percentage computation
 - Status filtering (critical/warning/healthy checkboxes)
@@ -109,6 +127,9 @@ Expected output: **25+ tests passing**, covering:
 - Order validation (6 validation rules)
 - Single order processing (success + failure)
 - Batch processing with mixed results
+- Credit risk-category tolerance tables (including unknown categories)
+- Credit exposure aggregation and limit/utilization boundaries
+- Credit block, zero-limit, and overdue-item override paths
 
 ---
 
