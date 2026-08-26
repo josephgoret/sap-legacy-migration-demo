@@ -122,6 +122,8 @@ See [`migration-playbook.md`](migration-playbook.md) for the reusable playbook t
 - **ABAP → Python translation reference** — common constructs mapped
 - **Quality checklist** — definition of "done" for each migrated object
 
+See [`migration-checklist.md`](migration-checklist.md) for the same playbook condensed into a per-object, phase-by-phase checkbox checklist.
+
 This playbook is what Devin executes at scale. Define it once, run it across hundreds of objects in parallel.
 
 ---
