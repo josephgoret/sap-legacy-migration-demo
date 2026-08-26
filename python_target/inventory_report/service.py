@@ -12,7 +12,7 @@ Migration notes:
 - Selection screen → query parameters / request body
 """
 
-from datetime import UTC, date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Optional
 
@@ -185,7 +185,7 @@ def generate_inventory_report(
     summary = build_summary(items)
 
     return InventoryReportResponse(
-        generated_at=datetime.now(UTC),
+        generated_at=datetime.now(timezone.utc),
         filters_applied=filters,
         total_items=len(items),
         summary=summary,
